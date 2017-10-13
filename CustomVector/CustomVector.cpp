@@ -181,12 +181,11 @@ void Vector<T>::erase(size_t index)
 
 	destination.as_element->~T();
 
-	PointerType source;
-	source.as_ptr = destination.as_ptr + sizeof(T);
-
 	//if not last element, close empty slot
 	if(index < m_size - 1)
 	{
+		PointerType source;
+		source.as_ptr = destination.as_ptr + sizeof(T);
 		memmove(destination.as_void, source.as_void, (m_size - 1 - index) * sizeof(T));
 	}
 	
@@ -196,10 +195,20 @@ void Vector<T>::erase(size_t index)
 template <class T>
 void Vector<T>::erase_by_swap(size_t index)
 {
+	PointerType destination;
+	destination.as_element = &(m_internal_array.as_element[index]);
 
-	//destructor
-	//swap with last
-	//--m_size;
+	destination.as_element->~T();
+
+	//if not last element, close empty slot
+	if (index < m_size - 1)
+	{
+		PointerType source;
+		source.as_ptr = m_internal_array.as_ptr + (m_size - 1) * sizeof(T);
+		memmove(destination.as_void, source.as_void, sizeof(T));
+	}
+
+	--m_size;
 }
 
 template <class T>
@@ -303,6 +312,29 @@ void TestErase()
 	printf("Erase Test done!\n");
 }
 
+void TestEraseBySwap()
+{
+	Vector<size_t> testVector;
+
+	testVector.push_back(123u);
+	testVector.push_back(456u);
+	testVector.push_back(789u);
+	testVector.push_back(123456789u);
+
+	assert(testVector[0] == 123u);
+	assert(testVector[1] == 456u);
+	assert(testVector[2] == 789u);
+	assert(testVector[3] == 123456789u);
+
+	testVector.erase_by_swap(1);
+
+	assert(testVector[0] == 123u);
+	assert(testVector[1] == 123456789u);
+	assert(testVector[2] == 789u);
+
+	printf("Erase By Swap Test done!\n");
+}
+
 int main ()
 {
 	TestPushBack(100000);
@@ -311,4 +343,7 @@ int main ()
 	//TestSubscript(0);
 
 	TestErase();
+	TestEraseBySwap();
+
+	printf("All Tests done!\n");
 }
