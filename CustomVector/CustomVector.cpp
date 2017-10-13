@@ -176,10 +176,21 @@ void Vector<T>::reserve(size_t n)
 template <class T>
 void Vector<T>::erase(size_t index)
 {
+	PointerType destination;
+	destination.as_element = &(m_internal_array.as_element[index]);
+
+	destination.as_element->~T();
+
+	PointerType source;
+	source.as_ptr = destination.as_ptr + sizeof(T);
+
+	//if not last element, close empty slot
+	if(index < m_size - 1)
+	{
+		memmove(destination.as_void, source.as_void, (m_size - 1 - index) * sizeof(T));
+	}
 	
-	//destructor
-	//move up
-	//--m_size;
+	--m_size;
 }
 
 template <class T>
@@ -192,8 +203,10 @@ void Vector<T>::erase_by_swap(size_t index)
 }
 
 template <class T>
-T& Vector<T>::operator[](size_t index)
+T& Vector<T>::operator[](const size_t index)
 {
+	//No check for >= 0 needed because index is unsigned!
+	assert("Subscript out of range!" && index < m_size);
 	return m_internal_array.as_element[index];
 }
 
@@ -256,11 +269,46 @@ void TestPushBack(size_t count)
 		assert("Could not verify values in Vector!" && indexEqualsValue);
 	} while (i != 0);
 
-	printf("TestPushBack with count %llu done!", count);
+	printf("TestPushBack with count %llu done!\n", count);
+}
+
+// index parameter is int to allow testing with negative subscript
+void TestSubscript(int index)
+{
+	Vector<size_t> testVector;
+
+	testVector[index] = 0;
+}
+
+void TestErase()
+{
+	Vector<size_t> testVector;
+
+	testVector.push_back(123u);
+	testVector.push_back(456u);
+	testVector.push_back(789u);
+	testVector.push_back(123456789u);
+
+	assert(testVector[0] == 123u);
+	assert(testVector[1] == 456u);
+	assert(testVector[2] == 789u);
+	assert(testVector[3] == 123456789u);
+
+	testVector.erase(1);
+
+	assert(testVector[0] == 123u);
+	assert(testVector[1] == 789u);
+	assert(testVector[2] == 123456789u);
+
+	printf("Erase Test done!\n");
 }
 
 int main ()
 {
 	TestPushBack(100000);
 
+	//TestSubscript(-1);
+	//TestSubscript(0);
+
+	TestErase();
 }
