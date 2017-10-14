@@ -456,174 +456,238 @@ size_t Vector<T>::GetDefaultGrowSize() const
  *	#################### Test Application ####################
  */
 
-void TestPushBack(size_t count)
+namespace Testing
 {
-	Vector<size_t> testVector;
-
-	size_t i = 0u;
-	for(i = 0u; i < count; ++i)
+	class TestClass
 	{
-		testVector.push_back(i);
+		
+	public:
+		TestClass();
+		TestClass(const TestClass& other);
+		~TestClass();
+
+		static const size_t m_testValue = 0xDEADBEEF;
+
+		size_t* m_testArray;
+		size_t m_elementCount;
+	};
+
+	TestClass::TestClass()
+		: m_elementCount(10u)
+	{
+		m_testArray = new size_t[m_elementCount];
+
+		for(size_t i = 0u; i < m_elementCount; ++i)
+		{
+			m_testArray[i] = m_testValue;
+		}
 	}
 
-	i = testVector.size();
-	do
+	TestClass::TestClass(const TestClass & other)
+		: m_elementCount(other.m_elementCount)
 	{
-		--i;
-		const bool indexEqualsValue = testVector[i] == i;
-		assert("Could not verify values in Vector!" && indexEqualsValue);
-	} while (i != 0);
+		m_testArray = new size_t[m_elementCount];
 
-	printf("TestPushBack with count %llu done!\n", count);
+		for (size_t i = 0u; i < m_elementCount; ++i)
+		{
+			m_testArray[i] = other.m_testArray[i];
+		}
+	}
+
+	TestClass::~TestClass()
+	{
+		delete[] m_testArray;
+	}
+
+	void TestBasicTypePushBack(size_t count)
+	{
+		Vector<size_t> testVector;
+
+		for (size_t i = 0u; i < count; ++i)
+		{
+			testVector.push_back(i);
+		}
+
+		for (size_t i = 0u; i < count; ++i)
+		{
+			const bool indexEqualsValue = testVector[i] == i;
+			assert("Could not verify values in Vector!" && indexEqualsValue);
+		}
+
+		printf("TestBasicTypePushBack with count %llu done!\n", count);
+	}
+
+	void TestBasicClassPushBack(size_t count)
+	{
+		Vector<TestClass> testVector;
+
+		for (size_t i = 0u; i < count; ++i)
+		{
+			testVector.push_back(TestClass());
+		}
+
+		for (size_t i = 0u; i < count; ++i)
+		{
+			for(size_t x = 0u; x < testVector[i].m_elementCount; ++x)
+			{
+				const bool isArrayValueCorrect = testVector[i].m_testArray[x] == TestClass::m_testValue;
+				assert("Could not verify values in Vector!" && isArrayValueCorrect);
+			}
+		}
+
+		printf("TestBasicClassPushBack with count %llu done!\n", count);
+	}
+
+	// index parameter is int to allow testing with negative subscript
+	void TestSubscript(int index)
+	{
+		Vector<size_t> testVector;
+
+		testVector[index] = 0;
+	}
+
+	void TestErase()
+	{
+		Vector<size_t> testVector;
+
+		testVector.push_back(123u);
+		testVector.push_back(456u);
+		testVector.push_back(789u);
+		testVector.push_back(123456789u);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+
+		testVector.erase(1);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 789u);
+		assert(testVector[2] == 123456789u);
+
+		printf("Erase Test done!\n");
+	}
+
+	void TestEraseBySwap()
+	{
+		Vector<size_t> testVector;
+
+		testVector.push_back(123u);
+		testVector.push_back(456u);
+		testVector.push_back(789u);
+		testVector.push_back(123456789u);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+
+		testVector.erase_by_swap(1);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 123456789u);
+		assert(testVector[2] == 789u);
+
+		printf("Erase By Swap Test done!\n");
+	}
+
+	void TestEraseByRange()
+	{
+		Vector<size_t> testVector;
+
+		testVector.push_back(123u);
+		testVector.push_back(456u);
+		testVector.push_back(789u);
+		testVector.push_back(123456789u);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+
+		testVector.erase(1, 2);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 123456789u);
+
+		printf("Erase By Range Test done!\n");
+	}
+
+	void TestCopyConstructor()
+	{
+		Vector<size_t> firstVector;
+
+		firstVector.push_back(123u);
+		firstVector.push_back(456u);
+		firstVector.push_back(789u);
+		firstVector.push_back(123456789u);
+
+		Vector<size_t> testVector(firstVector);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+
+		printf("Copy Constructor Test done!\n");
+	}
+
+	void TestResizing()
+	{
+		Vector<size_t> testVector;
+		testVector.resize(2500, 0xDEADBEEFu);
+
+		assert(testVector.size() == 2500);
+		const size_t capacity = testVector.capacity();
+
+		testVector.resize(500);
+
+		assert(testVector.size() == 500);
+		assert(testVector.capacity() == capacity);
+
+		printf("Resizing Test done!\n");
+	}
+
+	void TestReserving()
+	{
+		Vector<size_t> testVector;
+		testVector.reserve(2500);
+
+		SYSTEM_INFO sys_inf;
+		GetSystemInfo(&sys_inf);
+
+		const size_t pageSize = sys_inf.dwPageSize;
+
+		assert(testVector.empty());
+		const size_t expectedSize = (VirtualUnicornStuff::roundUp(2500 * sizeof(size_t), pageSize)) / sizeof(size_t);
+		assert(testVector.capacity() == expectedSize);
+
+		printf("Reserving Test done!\n");
+	}
+
 }
 
-// index parameter is int to allow testing with negative subscript
-void TestSubscript(int index)
-{
-	Vector<size_t> testVector;
-
-	testVector[index] = 0;
-}
-
-void TestErase()
-{
-	Vector<size_t> testVector;
-
-	testVector.push_back(123u);
-	testVector.push_back(456u);
-	testVector.push_back(789u);
-	testVector.push_back(123456789u);
-
-	assert(testVector[0] == 123u);
-	assert(testVector[1] == 456u);
-	assert(testVector[2] == 789u);
-	assert(testVector[3] == 123456789u);
-
-	testVector.erase(1);
-
-	assert(testVector[0] == 123u);
-	assert(testVector[1] == 789u);
-	assert(testVector[2] == 123456789u);
-
-	printf("Erase Test done!\n");
-}
-
-void TestEraseBySwap()
-{
-	Vector<size_t> testVector;
-
-	testVector.push_back(123u);
-	testVector.push_back(456u);
-	testVector.push_back(789u);
-	testVector.push_back(123456789u);
-
-	assert(testVector[0] == 123u);
-	assert(testVector[1] == 456u);
-	assert(testVector[2] == 789u);
-	assert(testVector[3] == 123456789u);
-
-	testVector.erase_by_swap(1);
-
-	assert(testVector[0] == 123u);
-	assert(testVector[1] == 123456789u);
-	assert(testVector[2] == 789u);
-
-	printf("Erase By Swap Test done!\n");
-}
-
-void TestEraseByRange()
-{
-	Vector<size_t> testVector;
-
-	testVector.push_back(123u);
-	testVector.push_back(456u);
-	testVector.push_back(789u);
-	testVector.push_back(123456789u);
-
-	assert(testVector[0] == 123u);
-	assert(testVector[1] == 456u);
-	assert(testVector[2] == 789u);
-	assert(testVector[3] == 123456789u);
-
-	testVector.erase(1, 2);
-
-	assert(testVector[0] == 123u);
-	assert(testVector[1] == 123456789u);
-
-	printf("Erase By Range Test done!\n");
-}
-
-void TestCopyConstructor()
-{
-	Vector<size_t> firstVector;
-
-	firstVector.push_back(123u);
-	firstVector.push_back(456u);
-	firstVector.push_back(789u);
-	firstVector.push_back(123456789u);
-
-	Vector<size_t> testVector(firstVector);
-
-	assert(testVector[0] == 123u);
-	assert(testVector[1] == 456u);
-	assert(testVector[2] == 789u);
-	assert(testVector[3] == 123456789u);
-
-	printf("Copy Constructor Test done!\n");
-}
-
-void TestResizing()
-{
-	Vector<size_t> testVector;
-	testVector.resize(2500);
-
-	assert(testVector.size() == 2500);
-	const size_t capacity = testVector.capacity();
-
-	testVector.resize(500);
-
-	assert(testVector.size() == 500);
-	assert(testVector.capacity() == capacity);
-
-	printf("Resizing Test done!\n");
-}
-
-void TestReserving()
-{
-	Vector<size_t> testVector;
-	testVector.reserve(2500);
-
-	SYSTEM_INFO sys_inf;
-	GetSystemInfo(&sys_inf);
-
-	const size_t pageSize = sys_inf.dwPageSize;
-
-	assert(testVector.empty());
-	const size_t expectedSize = (VirtualUnicornStuff::roundUp(2500 * sizeof(size_t), pageSize)) / sizeof(size_t);
-	assert(testVector.capacity() == expectedSize);
-
-	printf("Reserving Test done!\n");
-}
 
 //TODO Make better Tests
 //TODO Test with non-default constructors
+//TODO Test with Polymorphism
 int main ()
 {
-	TestPushBack(100000);
+	Testing::TestBasicTypePushBack(100000);
+	Testing::TestBasicClassPushBack(100);
 
 	//TestSubscript(-1);
 	//TestSubscript(0);
 
-	TestErase();
-	TestEraseBySwap();
-	TestEraseByRange();
+	Testing::TestErase();
+	Testing::TestEraseBySwap();
+	Testing::TestEraseByRange();
 
-	TestResizing();
-	TestReserving();
+	Testing::TestResizing();
+	Testing::TestReserving();
 
-	TestCopyConstructor();
-
-
+	Testing::TestCopyConstructor();
 
 	printf("All Tests done!\n");
 }
