@@ -64,8 +64,9 @@ public:
 	void push_back(const T& object);
 
 	// Resize the internal storage of the vector 
-	// TODO Talk with team about redundancy of temporary default object by duplicating code, probably useful if T has exspensive ctor
-	// This overload calls resize(size_t newSize, const T& object) with a default temporary object of type T
+	// Should not call resize(size_t, const T&) because object would have to be CopyConstructable/CopyInsertable
+	// Standard spezifies that this overload does not have to be CopyConstructable/CopyInsertable
+	// TODO Check Standard and other implementations
 	void resize(size_t newSize);
 
 	// Resize the internal storage of the vector with default object to use for initialization
@@ -98,11 +99,16 @@ public:
 	// * returns a reference to make it changeable
 	T& operator[] (size_t index);
 
+	// Subscript operator to access element at specific location/index
+	// * returns a reference to make it changeable
+	const T& operator[] (size_t index) const; 
+
 private:
 	//Init funciton initializes virtual address space, does not commit memory
 	void Init();
 
 	//Grows the internal capacity by the grow size rounded up to the next page size
+	//Size is in bytes!
 	void Grow(size_t growSize);
 
 	//Returns the default grow size (Current capacity)
@@ -151,18 +157,19 @@ void Vector<T>::Init()
 }
 
 template<class T>
-Vector<T>::Vector(const Vector & other)
+Vector<T>::Vector(const Vector<T>& other)
 	: m_size(0u)
 	, m_capacity(0u)
 	, m_pageSize(other.m_pageSize)
 {
 	//TODO Optimization -> If T trivially contructable use memcpy?
+
 	Init();
-	reserve(other.capacity);
+	reserve(other.m_capacity);
 
 	for(size_t i = 0; i < other.m_size; ++i)
 	{
-		push_back(other[i]);
+		push_back((other[i]));
 	}
 }
 
@@ -170,7 +177,7 @@ Vector<T>::Vector(const Vector & other)
 template <class T>
 Vector<T>::~Vector()
 {
-	//Desctuction in reverse order
+	//Desctuction of elements
 	for(size_t i = 0u; i < m_size; ++i)
 	{
 		const T* elementToDestruct = &(m_internal_array.as_element[i]);
@@ -217,16 +224,9 @@ void Vector<T>::push_back(const T& object)
 	++m_size;
 }
 
-//TODO: Talk about having this overload, and copy code to avoid temporary object
+//This overload 
 template <class T>
 void Vector<T>::resize(size_t newSize)
-{
-	//Call overload with default constructed object
-	resize(newSize, T());
-}
-
-template<class T>
-void Vector<T>::resize(size_t newSize, const T & object)
 {
 	//If size already equals newSize -> do nothing
 	if (newSize == m_size)
@@ -239,7 +239,47 @@ void Vector<T>::resize(size_t newSize, const T & object)
 	{
 		if (m_capacity < newSize)
 		{
-			const size_t growSize = newSize - m_capacity;
+			const size_t growSize = (newSize - m_capacity) * sizeof(T);
+
+			Grow(growSize);
+		}
+
+		PointerType targetPtr;
+		for (size_t i = m_size; i < newSize; ++i)
+		{
+			targetPtr.as_ptr = m_internal_array.as_ptr + i * sizeof(T);
+			new (targetPtr.as_void) T();
+		}
+	}
+	else //if new Size is smaller than old size
+	{
+		//Destruct redundant elements
+		for (size_t i = newSize; i < m_size; ++i)
+		{
+			const T* elementToDestruct = &(m_internal_array.as_element[i]);
+			//Destructor called by pointer because of possible virtual destructor (polymorphism)
+			elementToDestruct->~T();
+		}
+	}
+
+	m_size = newSize;
+}
+
+template<class T>
+void Vector<T>::resize(size_t newSize, const T& object)
+{
+	//If size already equals newSize -> do nothing
+	if (newSize == m_size)
+	{
+		return;
+	}
+
+	//If new size is greater than current size
+	if (newSize > m_size)
+	{
+		if (m_capacity < newSize)
+		{
+			const size_t growSize = (newSize - m_capacity) * sizeof(T);
 	
 			Grow(growSize);
 		}
@@ -274,7 +314,8 @@ void Vector<T>::reserve(size_t newCapacity)
 		return;
 	}
 
-	Grow(newCapacity - m_capacity);
+	const size_t growSize = (newCapacity - m_capacity) * sizeof(T);
+	Grow(growSize);
 }
 
 template <class T>
@@ -355,7 +396,15 @@ void Vector<T>::erase_by_swap(size_t index)
 }
 
 template <class T>
-T& Vector<T>::operator[](const size_t index)
+T& Vector<T>::operator[](size_t index)
+{
+	//No check for >= 0 needed because index is unsigned!
+	assert("Subscript out of range!" && index < m_size);
+	return m_internal_array.as_element[index];
+}
+
+template<class T>
+const T & Vector<T>::operator[](size_t index) const
 {
 	//No check for >= 0 needed because index is unsigned!
 	assert("Subscript out of range!" && index < m_size);
@@ -374,7 +423,7 @@ void Vector<T>::Grow(size_t growSize)
 		growSize = VirtualUnicornStuff::roundUp(sizeof(T), m_pageSize);
 	}
 	
-	//TODO Edge Case: Growing from 501MB would end over 1GB but half of vector is unused
+	//Edge Case: Growing from 501MB would end over 1GB but half of vector is unused
 	//Solution: Allow Growing once more to maximum of 1GB, but next time assert
 	if(m_committed_memory_end.as_ptr + growSize > m_virtual_memory_end.as_ptr)
 	{
@@ -506,17 +555,54 @@ void TestEraseByRange()
 
 void TestCopyConstructor()
 {
-	Vector<size_t> testVector;
+	Vector<size_t> firstVector;
+
+	firstVector.push_back(123u);
+	firstVector.push_back(456u);
+	firstVector.push_back(789u);
+	firstVector.push_back(123456789u);
+
+	Vector<size_t> testVector(firstVector);
+
+	assert(testVector[0] == 123u);
+	assert(testVector[1] == 456u);
+	assert(testVector[2] == 789u);
+	assert(testVector[3] == 123456789u);
+
+	printf("Copy Constructor Test done!\n");
 }
 
 void TestResizing()
 {
 	Vector<size_t> testVector;
+	testVector.resize(2500);
+
+	assert(testVector.size() == 2500);
+	const size_t capacity = testVector.capacity();
+
+	testVector.resize(500);
+
+	assert(testVector.size() == 500);
+	assert(testVector.capacity() == capacity);
+
+	printf("Resizing Test done!\n");
 }
 
-void StressTest(size_t count)
+void TestReserving()
 {
 	Vector<size_t> testVector;
+	testVector.reserve(2500);
+
+	SYSTEM_INFO sys_inf;
+	GetSystemInfo(&sys_inf);
+
+	const size_t pageSize = sys_inf.dwPageSize;
+
+	assert(testVector.empty());
+	const size_t expectedSize = (VirtualUnicornStuff::roundUp(2500 * sizeof(size_t), pageSize)) / sizeof(size_t);
+	assert(testVector.capacity() == expectedSize);
+
+	printf("Reserving Test done!\n");
 }
 
 //TODO Make better Tests
@@ -532,9 +618,12 @@ int main ()
 	TestEraseBySwap();
 	TestEraseByRange();
 
-	//TODO Test Resizing
-	//TODO Test Reserving
-	//TODO Test Copy Constructors
+	TestResizing();
+	TestReserving();
+
+	TestCopyConstructor();
+
+
 
 	printf("All Tests done!\n");
 }
