@@ -15,9 +15,11 @@ namespace VirtualMemory
 		return VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS);
 	}
 
-	void  FreeAddressSpace(void* from, size_t size)
+	//https://msdn.microsoft.com/en-us/library/windows/desktop/aa366892(v=vs.85).aspx
+	//If the dwFreeType parameter is MEM_RELEASE, size parameter must be 0 (zero).
+	void  FreeAddressSpace(void* from)
 	{
-		VirtualFree(from, size, MEM_RELEASE);
+		VirtualFree(from, 0u, MEM_RELEASE);
 	}
 
 
@@ -94,8 +96,8 @@ public:
 
 private:
 
-	void Grow(size_t growSize);
-	size_t GetGrowSize(void) const;
+	void GrowByBytes(size_t growSizeInBytes);
+	size_t GetGrowSizeInElements(void) const;
 
 	size_t m_size;
 	size_t m_capacity;
@@ -151,7 +153,7 @@ Vector<T>::~Vector()
 		//Destructor called by pointer because of possible virtual destructor (polymorphism)
 		elementToDestruct->~T();
 	}
-	VirtualMemory::FreeAddressSpace(m_virtual_mem_begin.as_void, m_capacity);
+	VirtualMemory::FreeAddressSpace(m_virtual_mem_begin.as_void);
 }
 
 template <typename T>
@@ -177,7 +179,7 @@ void Vector<T>::push_back(const T& object)
 {
 	if (m_capacity == m_size)
 	{
-		Grow(GetGrowSize());
+		GrowByBytes(GetGrowSizeInElements() * sizeof(T));
 	}
 
 	PointerType targetPtr;
@@ -199,8 +201,8 @@ void Vector<T>::resize(size_t newSize)
 	{
 		if (newSize > m_capacity) // If the capacity is not sufficient, we need to grow
 		{
-			const size_t growSize = (newSize - m_capacity) * sizeof(T);
-			Grow(growSize);
+			const size_t growSizeInBytes = (newSize - m_capacity) * sizeof(T);
+			GrowByBytes(growSizeInBytes);
 		}
 
 		PointerType targetPtr;
@@ -237,8 +239,8 @@ void Vector<T>::resize(size_t newSize, const T& object)
 	{
 		if (newSize > m_capacity) // If the capacity is not sufficient, we need to grow
 		{
-			const size_t growSize = (newSize - m_capacity) * sizeof(T);
-			Grow(growSize);
+			const size_t growSizeInBytes = (newSize - m_capacity) * sizeof(T);
+			GrowByBytes(growSizeInBytes);
 		}
 
 		PointerType targetPtr;
@@ -272,48 +274,53 @@ void Vector<T>::reserve(size_t newCapacity)
 		return;
 	}
 
-	const size_t growSize = (newCapacity - m_capacity) * sizeof(T);
-	Grow(growSize);
+	const size_t growSizeInBytes = (newCapacity - m_capacity) * sizeof(T);
+	GrowByBytes(growSizeInBytes);
 }
 
+// TODO: Discuss return value
 template <typename T>
 void Vector<T>::erase(size_t index)
 {
-	if (index < m_size - 1) // If we were not the last element, close the gap
 	{
-		// Walk from end to index and shift elements one slot in lot direction
-		for (size_t i = index; i < m_size - 1; ++i)
-		{
-			PointerType current, next;
-			current.as_element = &(m_internal_array.as_element[i]);
-			next.as_element = &(m_internal_array.as_element[i + 1]);
-
-			// Assign the next to the current element (assuming the user implemented the asignment operator properly)
-			// Also a requirement of std::vector (MoveAssignment) implemented
-			*current.as_element = *next.as_element;
-		}
-		// At the end call the dtor for the last element to free its resources too
-		// Also compliant to the std::vector interface that states that erase(n) calls ~T() n times
-		// and calls the assignment operator m times, where m are the elements after the erased one(s)
-		PointerType toDestruct;
-		toDestruct.as_element = &(m_internal_array.as_element[m_size - 1]);
-		toDestruct.as_element->~T();
+		//Check if index is in Range, no negative check needed because unsigned
+		const bool isIndexInRange = index < m_size;
+		assert("Index out of Range!" && isIndexInRange);
 	}
+
+	for (size_t i = index; i < m_size - 1; ++i)
+	{
+		PointerType current, next;
+		current.as_element = &(m_internal_array.as_element[i]);
+		next.as_element = &(m_internal_array.as_element[i + 1]);
+
+		// Assign the next to the current element (assuming the user implemented the asignment operator properly)
+		// Also a requirement of std::vector (MoveAssignment) implemented
+		*current.as_element = *next.as_element;
+	}
+
+	// At the end call the dtor for the last element to free its resources too
+	PointerType toDestruct;
+	toDestruct.as_element = &(m_internal_array.as_element[m_size - 1]);
+	toDestruct.as_element->~T();
+
 	--m_size;
 }
 
 template <typename T>
 void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 {
-	const bool isEndBiggerThanStart = rangeEnd > rangeBegin;
-	assert("endIndex needs to be larger than startIndex!" && isEndBiggerThanStart);
-
-	// TODO: Discuss!
-	// Because the standard says that first == last is a no-op we could
-	// derive from this that it just returns without doing anything.
-	if (rangeBegin == rangeEnd)
 	{
-		erase(rangeEnd);
+		//With this check, rangeEnd can never equal rangeBegin!
+		const bool isEndBiggerThanOrEqualToStart = rangeEnd >= rangeBegin;
+		assert("endIndex needs to be larger than startIndex!" && isEndBiggerThanOrEqualToStart);
+	}
+	
+	//	Quote: The iterator first does not need to be dereferenceable if first==last: erasing an empty range is a no-op.
+	// Comes from erasing ranges with iterator begin() and end()
+	// If begin == end means begin is not dereferencable and can not be deleted -> no-op
+	if(rangeEnd == rangeBegin)
+	{
 		return;
 	}
 
@@ -333,11 +340,10 @@ void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 	}
 
 	// Now delete the bubbled up elements that would lack resources if the dtor was not called
-	PointerType toDestruct;
 	for (size_t i = m_size - elementsToDelete; i < m_size; ++i)
 	{
-		toDestruct.as_element = &(m_internal_array.as_element[i]);
-		toDestruct.as_element->~T();
+		const T* toDestruct = &(m_internal_array.as_element[i]);
+		toDestruct->~T();
 	}
 
 	m_size -= elementsToDelete;
@@ -381,16 +387,18 @@ const T& Vector<T>::operator[](size_t index) const
 }
 
 template <typename T>
-void Vector<T>::Grow(size_t growSize)
+void Vector<T>::GrowByBytes(size_t growSizeInBytes)
 {
-	if (growSize == 0u) return; // I'm not sure why we ever want to allow a grow by 0
+	if (growSizeInBytes == 0u) return; // I'm not sure why we ever want to allow a grow by 0
 	
-	size_t roundedGrowSize = MathUtil::roundUpToMultiple(growSize, m_pageSize);
+	size_t roundedGrowSize = MathUtil::roundUpToMultiple(growSizeInBytes, m_pageSize);
 
-	const bool isEndOfVirtualMemoryReached = m_physical_mem_end.as_ptr == m_virtual_mem_end.as_ptr;
-	assert("Maximum Capacity reached! Vector can not grow further." && !isEndOfVirtualMemoryReached);
+	{
+		const bool isEndOfVirtualMemoryReached = m_physical_mem_end.as_ptr == m_virtual_mem_end.as_ptr;
+		assert("Maximum Capacity reached! Vector can not grow further." && !isEndOfVirtualMemoryReached);
+	}
 
-	// If the requested growSize would exceed the maximum capacity, grow only to the maximum capacity
+	// If the requested growSizeInBytes would exceed the maximum capacity, grow only to the maximum capacity
 	if (m_physical_mem_begin.as_ptr + roundedGrowSize > m_virtual_mem_end.as_ptr)
 	{
 		size_t maxAvailableGrowSize = m_virtual_mem_end.as_ptr - m_physical_mem_end.as_ptr;
@@ -405,7 +413,7 @@ void Vector<T>::Grow(size_t growSize)
 }
 
 template <typename T>
-size_t Vector<T>::GetGrowSize() const
+size_t Vector<T>::GetGrowSizeInElements() const
 {
 	// This is a small trick we found in a blog and thought about a bit
 	// If we allocate one element it is very probable that we allocate a few more and 
@@ -416,6 +424,11 @@ size_t Vector<T>::GetGrowSize() const
 // ~~~~~~~ Test Program ~~~~~~~
 namespace Testing
 {
+	struct HugeType
+	{
+		uint32_t data[16384] = { 0xDEADBEEF };
+	};
+
 	class TestClass
 	{
 
@@ -424,7 +437,7 @@ namespace Testing
 		TestClass(const TestClass& other);
 		~TestClass();
 
-		static const size_t m_testValue = 0xDEADBEEF;
+		static const size_t m_testValue = 0xDEADBEEFDEADBEEF;
 
 		size_t* m_testArray;
 		size_t m_elementCount;
@@ -523,6 +536,7 @@ namespace Testing
 		assert(testVector[0] == 123u);
 		assert(testVector[1] == 789u);
 		assert(testVector[2] == 123456789u);
+		assert(testVector.size() == 3u);
 
 		printf("Erase Test done!\n");
 	}
@@ -546,6 +560,7 @@ namespace Testing
 		assert(testVector[0] == 123u);
 		assert(testVector[1] == 123456789u);
 		assert(testVector[2] == 789u);
+		assert(testVector.size() == 3u);
 
 		printf("Erase By Swap Test done!\n");
 	}
@@ -568,6 +583,7 @@ namespace Testing
 
 		assert(testVector[0] == 123u);
 		assert(testVector[1] == 123456789u);
+		assert(testVector.size() == 2u);
 
 		printf("Erase By Range Test done!\n");
 	}
