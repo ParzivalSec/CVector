@@ -352,21 +352,19 @@ void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 template <typename T>
 void Vector<T>::erase_by_swap(size_t index)
 {
-	PointerType toDelete;
-	toDelete.as_element = &(m_internal_array.as_element[index]);
-	toDelete.as_element->~T();
+	assert("Index out of Range!" && index < m_size);
 
-	if (index < m_size - 1) // If we were not the last element, close the gap
+	PointerType lastElement;
+	lastElement.as_element = &(m_internal_array.as_element[m_size - 1]);
+
+	if (index < m_size - 1) 
 	{
-		// Walk from end to index and shift elements one slot in lot direction
-		for (size_t i = m_size - 1; i >= index; --i)
-		{
-			PointerType lastElement;
-			lastElement.as_element = &(m_internal_array.as_element[m_size - 1]);
-			new (toDelete.as_void) T(*(lastElement.as_element));
-			lastElement.as_element->~T();
-		}
+		PointerType toDelete;
+		toDelete.as_element = &(m_internal_array.as_element[index]);
+		*toDelete.as_element = *lastElement.as_element;
 	}
+
+	lastElement.as_element->~T();
 	--m_size;
 }
 
