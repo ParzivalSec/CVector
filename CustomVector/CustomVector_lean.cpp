@@ -422,9 +422,19 @@ size_t Vector<T>::GetGrowSizeInElements() const
 // ~~~~~~~ Test Program ~~~~~~~
 namespace Testing
 {
+	static const uint32_t  uintTestValue = 0xDEADBEEF;
+	static const size_t sizetTestValue = 0xDEADBEEFDEADBEEF;
+
 	struct HugeType
 	{
-		uint32_t data[16384] = { 0xDEADBEEF };
+		HugeType()
+		{
+			for(size_t i = 0u; i < 16384; ++i)
+			{
+				data[i] = uintTestValue;
+			}
+		}
+		uint32_t data[16384] = { uintTestValue };
 	};
 
 	class TestClass
@@ -435,9 +445,7 @@ namespace Testing
 		TestClass(const TestClass& other);
 		~TestClass();
 
-		static const size_t m_testValue = 0xDEADBEEFDEADBEEF;
-
-		size_t* m_testArray;
+		size_t* m_testArray = nullptr;
 		size_t m_elementCount;
 	};
 
@@ -448,13 +456,15 @@ namespace Testing
 
 		for (size_t i = 0u; i < m_elementCount; ++i)
 		{
-			m_testArray[i] = m_testValue;
+			m_testArray[i] = sizetTestValue;
 		}
 	}
 
 	TestClass::TestClass(const TestClass & other)
 		: m_elementCount(other.m_elementCount)
 	{
+		delete[] m_testArray;
+
 		m_testArray = new size_t[m_elementCount];
 
 		for (size_t i = 0u; i < m_elementCount; ++i)
@@ -499,12 +509,33 @@ namespace Testing
 		{
 			for (size_t x = 0u; x < testVector[i].m_elementCount; ++x)
 			{
-				const bool isArrayValueCorrect = testVector[i].m_testArray[x] == TestClass::m_testValue;
+				const bool isArrayValueCorrect = testVector[i].m_testArray[x] == sizetTestValue;
 				assert("Could not verify values in Vector!" && isArrayValueCorrect);
 			}
 		}
 
 		printf("TestBasicClassPushBack with count %llu done!\n", count);
+	}
+
+	void TestHugeTypePushBack(size_t count)
+	{
+		Vector<HugeType> testVector;
+
+		for (size_t i = 0u; i < count; ++i)
+		{
+			testVector.push_back(HugeType());
+		}
+
+		for (size_t i = 0u; i < count; ++i)
+		{
+			for (size_t x = 0u; x < 16384; ++x)
+			{
+				const bool isArrayValueCorrect = testVector[i].data[x] == uintTestValue;
+				assert("Could not verify values in Vector!" && isArrayValueCorrect);
+			}
+		}
+
+		printf("TestHugeTypePushBack with count %llu done!\n", count);
 	}
 
 	// index parameter is int to allow testing with negative subscript
@@ -608,7 +639,7 @@ namespace Testing
 	void TestResizing()
 	{
 		Vector<size_t> testVector;
-		testVector.resize(2500, 0xDEADBEEFu);
+		testVector.resize(2500, 0xDEADBEEF);
 
 		assert(testVector.size() == 2500);
 		const size_t capacity = testVector.capacity();
@@ -646,6 +677,7 @@ int main()
 {
 	Testing::TestBasicTypePushBack(100000);
 	Testing::TestBasicClassPushBack(100);
+	Testing::TestHugeTypePushBack(500);
 
 	//TestSubscript(-1);
 	//TestSubscript(0);
