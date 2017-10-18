@@ -424,17 +424,18 @@ namespace Testing
 {
 	static const uint32_t  uintTestValue = 0xDEADBEEF;
 	static const size_t sizetTestValue = 0xDEADBEEFDEADBEEF;
+	static const size_t hugeTypeTestCount = 6666u;
 
 	struct HugeType
 	{
 		HugeType()
 		{
-			for(size_t i = 0u; i < 16384; ++i)
+			for(size_t i = 0u; i < hugeTypeTestCount; ++i)
 			{
 				data[i] = uintTestValue;
 			}
 		}
-		uint32_t data[16384] = { uintTestValue };
+		uint32_t data[hugeTypeTestCount] = { uintTestValue };
 	};
 
 	class TestClass
@@ -528,7 +529,7 @@ namespace Testing
 
 		for (size_t i = 0u; i < count; ++i)
 		{
-			for (size_t x = 0u; x < 16384; ++x)
+			for (size_t x = 0u; x < hugeTypeTestCount; ++x)
 			{
 				const bool isArrayValueCorrect = testVector[i].data[x] == uintTestValue;
 				assert("Could not verify values in Vector!" && isArrayValueCorrect);
