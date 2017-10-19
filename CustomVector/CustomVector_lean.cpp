@@ -131,11 +131,11 @@ Vector<T>::Vector(const Vector& other)
 	: m_size(0u)
 	, m_capacity(0u)
 	, m_pageSize(VirtualMemory::GetPageSize())
-	, m_virtual_mem_begin{ VirtualMemory::ReserveAddressSpace(MAX_VECTOR_CAPACITY) }
-	, m_virtual_mem_end{ reinterpret_cast<void*>(m_virtual_mem_begin.as_ptr + MAX_VECTOR_CAPACITY) }
-	, m_physical_mem_begin{ m_virtual_mem_begin }
-	, m_physical_mem_end{ m_virtual_mem_begin }
-	, m_internal_array{ m_physical_mem_begin }
+	, m_virtual_mem_begin { VirtualMemory::ReserveAddressSpace(MAX_VECTOR_CAPACITY) }
+	, m_virtual_mem_end { reinterpret_cast<void*>(m_virtual_mem_begin.as_ptr + MAX_VECTOR_CAPACITY) }
+	, m_physical_mem_begin { m_virtual_mem_begin }
+	, m_physical_mem_end { m_virtual_mem_begin }
+	, m_internal_array { m_physical_mem_begin }
 {
 	reserve(other.m_capacity);
 	for (size_t i = 0; i < other.m_size; ++i)
@@ -149,9 +149,7 @@ Vector<T>::~Vector()
 {
 	for (size_t i = 0u; i < m_size; ++i)
 	{
-		const T* elementToDestruct = &(m_internal_array.as_element[i]);
-		//Destructor called by pointer because of possible virtual destructor (polymorphism)
-		elementToDestruct->~T();
+		m_internal_array.as_element[i].~T();
 	}
 	VirtualMemory::FreeAddressSpace(m_virtual_mem_begin.as_void);
 }
@@ -219,9 +217,7 @@ void Vector<T>::resize(size_t newSize)
 		//Destruct redundant elements
 		for (size_t i = newSize; i < m_size; ++i)
 		{
-			const T* elementToDestruct = &(m_internal_array.as_element[i]);
-			//Destructor called by pointer because of possible virtual destructor (polymorphism)
-			elementToDestruct->~T();
+			m_internal_array.as_element[i].~T();
 		}
 	}
 	m_size = newSize;
@@ -257,9 +253,7 @@ void Vector<T>::resize(size_t newSize, const T& object)
 		//Destruct redundant elements
 		for (size_t i = newSize; i < m_size; ++i)
 		{
-			const T* elementToDestruct = &(m_internal_array.as_element[i]);
-			//Destructor called by pointer because of possible virtual destructor (polymorphism)
-			elementToDestruct->~T();
+			m_internal_array.as_element[i].~T();
 		}
 	}
 	m_size = newSize;
@@ -300,9 +294,7 @@ void Vector<T>::erase(size_t index)
 	}
 
 	// At the end call the dtor for the last element to free its resources too
-	PointerType toDestruct;
-	toDestruct.as_element = &(m_internal_array.as_element[m_size - 1]);
-	toDestruct.as_element->~T();
+	m_internal_array.as_element[m_size - 1].~T();
 
 	--m_size;
 }
@@ -311,42 +303,40 @@ template <typename T>
 void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 {
 	{
-		//With this check, rangeEnd can never equal rangeBegin!
-		const bool isEndBiggerThanOrEqualToStart = rangeEnd >= rangeBegin;
-		assert("endIndex needs to be larger than startIndex!" && isEndBiggerThanOrEqualToStart);
+		const bool isEndBiggerThanStart = rangeEnd > rangeBegin;
+		assert("EndIndex needs to be larger than StartIndex!" && isEndBiggerThanStart);
+		const bool isEndInVector = rangeEnd <= m_size - 1;
+		assert("EndIndex is out of vector range" && isEndInVector);
 	}
 	
-	//	Quote: The iterator first does not need to be dereferenceable if first==last: erasing an empty range is a no-op.
+	// Quote: The iterator first does not need to be dereferenceable if first==last: erasing an empty range is a no-op.
 	// Comes from erasing ranges with iterator begin() and end()
 	// If begin == end means begin is not dereferencable and can not be deleted -> no-op
-	if(rangeEnd == rangeBegin)
+	if (rangeBegin != rangeEnd)
 	{
-		return;
+		// Erasing a range needs to bubbling up a group of holes
+		// To do so we check how many elements shall be deleted and offset the index of the loop by this
+		// to assign a still valid object to an invalid hole.
+		size_t elementsToDelete = rangeEnd - rangeBegin + 1;
+		for (size_t i = rangeBegin; i < m_size - elementsToDelete; ++i)
+		{
+			PointerType current, next;
+			current.as_element = &(m_internal_array.as_element[i]);
+			next.as_element = &(m_internal_array.as_element[i + elementsToDelete]);
+
+			// Assign the next to the current element (assuming the user implemented the asignment operator properly)
+			// Also a requirement of std::vector (MoveAssignment) implemented
+			*current.as_element = *next.as_element;
+		}
+
+		// Now delete the bubbled up elements that would lack resources if the dtor was not called
+		for (size_t i = m_size - elementsToDelete; i < m_size; ++i)
+		{
+			m_internal_array.as_element[i].~T();
+		}
+
+		m_size -= elementsToDelete;
 	}
-
-	// Erasing a range needs to bubbling up a group of holes
-	// To do so we check how many elements shall be deleted and offset the index of the loop by this
-	// to assign a still valid object to an invalid hole.
-	size_t elementsToDelete = rangeEnd - rangeBegin + 1;
-	for (size_t i = rangeBegin; i < m_size - elementsToDelete; ++i)
-	{
-		PointerType current, next;
-		current.as_element = &(m_internal_array.as_element[i]);
-		next.as_element = &(m_internal_array.as_element[i + elementsToDelete]);
-
-		// Assign the next to the current element (assuming the user implemented the asignment operator properly)
-		// Also a requirement of std::vector (MoveAssignment) implemented
-		*current.as_element = *next.as_element;
-	}
-
-	// Now delete the bubbled up elements that would lack resources if the dtor was not called
-	for (size_t i = m_size - elementsToDelete; i < m_size; ++i)
-	{
-		const T* toDestruct = &(m_internal_array.as_element[i]);
-		toDestruct->~T();
-	}
-
-	m_size -= elementsToDelete;
 }
 
 template <typename T>
@@ -415,7 +405,7 @@ size_t Vector<T>::GetGrowSizeInElements() const
 {
 	// This is a small trick we found in a blog and thought about a bit
 	// If we allocate one element it is very probable that we allocate a few more and 
-	// it shows a small performance gain when allocating 8 slots at the bgeinning instead of going 1-2-4-8 for the first few push_backs
+	// it shows a small performance gain when allocating 8 slots at the beginning instead of going 1-2-4-8 for the first few push_backs
 	return m_capacity ? m_capacity * 2 : 8;
 }
 
@@ -671,17 +661,38 @@ namespace Testing
 	}
 }
 
+template<class T>
+void A()
+{
+	// default initialization
+	T* a = new T;
+	printf("Default initialized T at: %p\n", a);
+	assert("Int variable was default initialized" && *a != 0);
+}
+
+template<class T>
+void B()
+{
+	// zero initialization
+	T* b = new T();
+	printf("Zero initialized T at: %p\n", b);
+	assert("Int variable was zero initialized" && *b == 0);
+}
+
+class ClassWithoutDefaultCTOR
+{
+public:
+	ClassWithoutDefaultCTOR(int bar) : foo(bar) {} 
+	int foo;
+};
+
 //TODO Make better Tests
 //TODO Test with non-default constructors
-//TODO Test with Polymorphism
 int main()
 {
 	Testing::TestBasicTypePushBack(100000);
 	Testing::TestBasicClassPushBack(100);
 	Testing::TestHugeTypePushBack(500);
-
-	//TestSubscript(-1);
-	//TestSubscript(0);
 
 	Testing::TestErase();
 	Testing::TestEraseBySwap();
@@ -692,6 +703,19 @@ int main()
 
 	Testing::TestCopyConstructor();
 
+	// T() vs T ctor call tests (zero initialization vs. default initialization)
+	A<int>();
+	B<int>();
+
+	Vector<ClassWithoutDefaultCTOR> vec;
+	vec.push_back(ClassWithoutDefaultCTOR(10));
+	vec.push_back(ClassWithoutDefaultCTOR(10));
+	vec.erase(0, 1);
+
 	printf("All Tests done!\n");
+
+	std::vector<int> a;
+	a.resize(10, 10);
+	a.erase(a.begin() + 5, a.begin() + 5);
 }
 
