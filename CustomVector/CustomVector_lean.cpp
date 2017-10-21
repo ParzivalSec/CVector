@@ -187,6 +187,13 @@ void Vector<T>::push_back(const T& object)
 	++m_size;
 }
 
+/*
+ * On a resize request we have 3 possible actions to do:
+ * - newSize == m_size: do nothing and we are good
+ * - newSize > m_size: We need to expand the vector to hold at least newSize elements, if the capacity fits: good, if not we have to grow
+ * - newSize < m_size: We need to destroy elements until m_size fits the newSize, for this we need to call N destructors where N is the
+ *                     amount of elements that reside in the vector after newSize. Then we reduce m_size. We don't hand back capacity.
+ */
 template <typename T>
 void Vector<T>::resize(size_t newSize)
 {
@@ -223,6 +230,11 @@ void Vector<T>::resize(size_t newSize)
 	m_size = newSize;
 }
 
+/*
+ * This resize overload works just like the resize(size_t) function but with the difference of
+ * constructing the new elements using the cctor of the T type and call it with the provided template
+ * object
+ */
 template <typename T>
 void Vector<T>::resize(size_t newSize, const T& object)
 {
@@ -243,8 +255,7 @@ void Vector<T>::resize(size_t newSize, const T& object)
 		for (size_t i = m_size; i < newSize; ++i)
 		{
 			targetPtr.as_ptr = m_internal_array.as_ptr + i * sizeof(T);
-			// Small optimization here for built-in types. Before we called T() here what we discovered zero-initializes built-in types
-			// introducind a very small overhead to default-initialization but it can be measured and therefore gained us some performace
+			// Here we call T`s CCTOR with the template object from the parameters
 			new (targetPtr.as_void) T(object);
 		}
 	}
@@ -259,6 +270,11 @@ void Vector<T>::resize(size_t newSize, const T& object)
 	m_size = newSize;
 }
 
+/**
+ * In reserve(size_t) we try to aquire new resources to fit the requested capacity. If we already have grown big enough
+ * we have to do nothing. If we don't fit we grow the internal array by requesting more physical memory from our
+ * preallocated virtual address space.
+ */
 template <typename T>
 void Vector<T>::reserve(size_t newCapacity)
 {
@@ -272,7 +288,18 @@ void Vector<T>::reserve(size_t newCapacity)
 	GrowByBytes(growSizeInBytes);
 }
 
-// TODO: Discuss return value
+// INFO: All erase functions require T to properly implement the assignment operator and DTOR of the type
+
+/**
+ * Erase with one parameter removes the element under this index from the vector. We first check if the index is out of range
+ * where we can only do the check for the upper bound because we decided to take a size_t as parameter (no negativ index). We
+ * then using the assignment operator of the stored type T to move every element on slot to the front and so we 'bubble up'
+ * the element we have the dtor upon to the end. We then call the dtor to the last element and reuce the size
+ * 
+ * We stick to the complexity behaviour if std::vector
+ * that says erase will call DTOR for N where N is the amount of elements to delete and will call Assignment OP M times
+ * where M is the amount of elements after the deleted one.
+ */
 template <typename T>
 void Vector<T>::erase(size_t index)
 {
@@ -299,12 +326,16 @@ void Vector<T>::erase(size_t index)
 	--m_size;
 }
 
+/**
+ * EraseRange works just like erase but with the difference that a whole range is cleared.
+ * If Begin == End we do nothing.
+ */
 template <typename T>
 void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 {
 	{
-		const bool isEndBiggerThanStart = rangeEnd > rangeBegin;
-		assert("EndIndex needs to be larger than StartIndex!" && isEndBiggerThanStart);
+		const bool isEndBiggerThanOrEqualToStart = rangeEnd >= rangeBegin;
+		assert("EndIndex needs to be larger than or equal to StartIndex!" && isEndBiggerThanOrEqualToStart);
 		const bool isEndInVector = rangeEnd <= m_size - 1;
 		assert("EndIndex is out of vector range" && isEndInVector);
 	}
@@ -329,7 +360,7 @@ void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 			*current.as_element = *next.as_element;
 		}
 
-		// Now delete the bubbled up elements that would lack resources if the dtor was not called
+		// Now delete the bubbled up elements that would leak resources if the dtor was not called
 		for (size_t i = m_size - elementsToDelete; i < m_size; ++i)
 		{
 			m_internal_array.as_element[i].~T();
@@ -339,6 +370,10 @@ void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 	}
 }
 
+/**
+ * Erase by swap is a little more performant than erase because it just calls the assignment OP once to 
+ * assign the last element to the one to delete and then calls the DTOR of the last element to free the resources
+ */
 template <typename T>
 void Vector<T>::erase_by_swap(size_t index)
 {
@@ -374,11 +409,16 @@ const T& Vector<T>::operator[](size_t index) const
 	return m_internal_array.as_element[index];
 }
 
+/**
+ * GrowByBytes is an internal function used to get more physical memory for the
+ * preallocated virtual address space. 
+ */
 template <typename T>
 void Vector<T>::GrowByBytes(size_t growSizeInBytes)
 {
-	if (growSizeInBytes == 0u) return; // I'm not sure why we ever want to allow a grow by 0
+	if (growSizeInBytes == 0u) return; // Grow by 0 are just rejected
 	
+	// Round up to the next highest multiple of the current OS page size
 	size_t roundedGrowSize = MathUtil::roundUpToMultiple(growSizeInBytes, m_pageSize);
 
 	{
@@ -406,138 +446,118 @@ size_t Vector<T>::GetGrowSizeInElements() const
 	// This is a small trick we found in a blog and thought about a bit
 	// If we allocate one element it is very probable that we allocate a few more and 
 	// it shows a small performance gain when allocating 8 slots at the beginning instead of going 1-2-4-8 for the first few push_backs
+	// INFO: This is a better optimization for a non virtual mem based vector implementation but we leave it here as a reference to think
+	// about this kind of micro-opts when virtual mem would not be a thing (thank `eternal thing` it is)
 	return m_capacity ? m_capacity * 2 : 8;
 }
 
-// ~~~~~~~ Test Program ~~~~~~~
-namespace Testing
+/// ++++++++++++++++++++++++++++++++++++++++++
+/// ++++++++++++++ TEST PROGRAM ++++++++++++++
+/// ++++++++++++++++++++++++++++++++++++++++++
+
+namespace UnitTests
 {
-	static const uint32_t  uintTestValue = 0xDEADBEEF;
-	static const size_t sizetTestValue = 0xDEADBEEFDEADBEEF;
-	static const size_t hugeTypeTestCount = 6666u;
-
-	struct HugeType
+	void Construction()
 	{
-		HugeType()
+		Vector<int> intVec;
+		assert("Initial capacity was not 0" && intVec.capacity() == 0);
+		assert("Initial size was not 0" && intVec.size() == 0);
+	}
+
+	void CopyConstruction()
+	{
+		Vector<size_t> firstVector;
+
+		firstVector.push_back(123u);
+		firstVector.push_back(456u);
+		firstVector.push_back(789u);
+		firstVector.push_back(123456789u);
+
+		Vector<size_t> testVector(firstVector);
+		assert("Vector size mismatch" && firstVector.size() == testVector.size());
+		assert("Vector capacity mismatch" && firstVector.capacity() == testVector.capacity());
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+	}
+
+	void Assignment() {}
+
+	void PushBack()
+	{
+		Vector<size_t> firstVec;
+
+		for (size_t i = 0; i < 5; ++i)
 		{
-			for(size_t i = 0u; i < hugeTypeTestCount; ++i)
+			firstVec.push_back(i);
+		}
+
+		assert("Size should equal 5" && firstVec.size() == 5);
+
+		for (size_t i = 0; i < 5; ++i)
+		{
+			assert("Vector value mismatch" && firstVec[i] == i);
+		}
+	}
+
+	void Reserve()
+	{
+		Vector<int> vec;
+		// We want to reserve spce for 100 ints (100 * 4 = 400 bytes mem), because we use VirtualMem
+		// we can only allocate in page size chunks and will reserve here at least 4KB (4096 bytes) mem, so the
+		// capacity shall be 1024 after the reserve call
+		vec.reserve(100);
+		assert("Capacity did not match the expected grow behaviour" && vec.capacity() == 1024);
+	}
+
+	void ResizeDefaultCtor(size_t initialSize, size_t resizeSize)
+	{
+		Vector<size_t> vec;
+		for (size_t i = 0; i < initialSize; ++i)
+		{
+			vec.push_back(i);
+		}
+		vec.resize(resizeSize);
+		assert("Vector size did not changed as requested" && vec.size() == resizeSize);
+	}
+
+	void ResizeBigDefaultCtor()
+	{
+		Vector<int> testVector;
+		testVector.resize(2500, 0xDEADBEEF);
+
+		assert(testVector.size() == 2500);
+		const size_t capacity = testVector.capacity();
+
+		testVector.resize(500);
+
+		assert(testVector.size() == 500);
+		assert(testVector.capacity() == capacity);
+	}
+
+	void ResizeWithValue(size_t initialSize, size_t resizeSize)
+	{
+		Vector<size_t> vec;
+		for (size_t i = 0; i < initialSize; ++i)
+		{
+			vec.push_back(i);
+		}
+		vec.resize(resizeSize, 5);
+
+		if (resizeSize > initialSize)
+		{
+			for (size_t i = initialSize; i < resizeSize; ++i)
 			{
-				data[i] = uintTestValue;
-			}
-		}
-		uint32_t data[hugeTypeTestCount] = { uintTestValue };
-	};
-
-	class TestClass
-	{
-
-	public:
-		TestClass();
-		TestClass(const TestClass& other);
-		~TestClass();
-
-		size_t* m_testArray = nullptr;
-		size_t m_elementCount;
-	};
-
-	TestClass::TestClass()
-		: m_elementCount(10u)
-	{
-		m_testArray = new size_t[m_elementCount];
-
-		for (size_t i = 0u; i < m_elementCount; ++i)
-		{
-			m_testArray[i] = sizetTestValue;
-		}
-	}
-
-	TestClass::TestClass(const TestClass & other)
-		: m_elementCount(other.m_elementCount)
-	{
-		delete[] m_testArray;
-
-		m_testArray = new size_t[m_elementCount];
-
-		for (size_t i = 0u; i < m_elementCount; ++i)
-		{
-			m_testArray[i] = other.m_testArray[i];
-		}
-	}
-
-	TestClass::~TestClass()
-	{
-		delete[] m_testArray;
-	}
-
-	void TestBasicTypePushBack(size_t count)
-	{
-		Vector<size_t> testVector;
-
-		for (size_t i = 0u; i < count; ++i)
-		{
-			testVector.push_back(i);
-		}
-
-		for (size_t i = 0u; i < count; ++i)
-		{
-			const bool indexEqualsValue = testVector[i] == i;
-			assert("Could not verify values in Vector!" && indexEqualsValue);
-		}
-
-		printf("TestBasicTypePushBack with count %llu done!\n", count);
-	}
-
-	void TestBasicClassPushBack(size_t count)
-	{
-		Vector<TestClass> testVector;
-
-		for (size_t i = 0u; i < count; ++i)
-		{
-			testVector.push_back(TestClass());
-		}
-
-		for (size_t i = 0u; i < count; ++i)
-		{
-			for (size_t x = 0u; x < testVector[i].m_elementCount; ++x)
-			{
-				const bool isArrayValueCorrect = testVector[i].m_testArray[x] == sizetTestValue;
-				assert("Could not verify values in Vector!" && isArrayValueCorrect);
-			}
-		}
-
-		printf("TestBasicClassPushBack with count %llu done!\n", count);
-	}
-
-	void TestHugeTypePushBack(size_t count)
-	{
-		Vector<HugeType> testVector;
-
-		for (size_t i = 0u; i < count; ++i)
-		{
-			testVector.push_back(HugeType());
-		}
-
-		for (size_t i = 0u; i < count; ++i)
-		{
-			for (size_t x = 0u; x < hugeTypeTestCount; ++x)
-			{
-				const bool isArrayValueCorrect = testVector[i].data[x] == uintTestValue;
-				assert("Could not verify values in Vector!" && isArrayValueCorrect);
+				assert("Resize did not fill elements with requested default value" && vec[i] == 5);
 			}
 		}
 
-		printf("TestHugeTypePushBack with count %llu done!\n", count);
+		assert("Vector size did not changed as requested" && vec.size() == resizeSize);
 	}
 
-	// index parameter is int to allow testing with negative subscript
-	void TestSubscript(int index)
-	{
-		Vector<size_t> testVector;
-
-		testVector[index] = 0;
-	}
-
-	void TestErase()
+	void EraseSingle()
 	{
 		Vector<size_t> testVector;
 
@@ -557,11 +577,52 @@ namespace Testing
 		assert(testVector[1] == 789u);
 		assert(testVector[2] == 123456789u);
 		assert(testVector.size() == 3u);
-
-		printf("Erase Test done!\n");
 	}
 
-	void TestEraseBySwap()
+	void EraseRange()
+	{
+		Vector<size_t> testVector;
+
+		testVector.push_back(123u);
+		testVector.push_back(456u);
+		testVector.push_back(789u);
+		testVector.push_back(123456789u);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+
+		testVector.erase(1, 2);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 123456789u);
+		assert(testVector.size() == 2u);
+	}
+
+	void EraseEmptyRange()
+	{
+		Vector<size_t> testVector;
+
+		testVector.push_back(123u);
+		testVector.push_back(456u);
+		testVector.push_back(789u);
+		testVector.push_back(123456789u);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+
+		testVector.erase(1, 1);
+
+		assert(testVector[0] == 123u);
+		assert(testVector[1] == 456u);
+		assert(testVector[2] == 789u);
+		assert(testVector[3] == 123456789u);
+	}
+
+	void EraseBySwap()
 	{
 		Vector<size_t> testVector;
 
@@ -581,141 +642,345 @@ namespace Testing
 		assert(testVector[1] == 123456789u);
 		assert(testVector[2] == 789u);
 		assert(testVector.size() == 3u);
-
-		printf("Erase By Swap Test done!\n");
 	}
 
-	void TestEraseByRange()
+	namespace CustomTypes
 	{
-		Vector<size_t> testVector;
+		struct ClassWithoutDefaultCTOR
+		{
+			ClassWithoutDefaultCTOR(int bar) : foo(bar) {}
+			int foo;
+		};
 
-		testVector.push_back(123u);
-		testVector.push_back(456u);
-		testVector.push_back(789u);
-		testVector.push_back(123456789u);
+		struct ClassWithoutCCTOR
+		{
+			ClassWithoutCCTOR() {}
+			ClassWithoutCCTOR(const ClassWithoutCCTOR& other) = delete;
+		};
 
-		assert(testVector[0] == 123u);
-		assert(testVector[1] == 456u);
-		assert(testVector[2] == 789u);
-		assert(testVector[3] == 123456789u);
+		struct ClassWithoutAssignmentOP
+		{
+			ClassWithoutAssignmentOP() {}
+			ClassWithoutAssignmentOP(const ClassWithoutAssignmentOP* other) {}
+			ClassWithoutAssignmentOP& operator=(const ClassWithoutAssignmentOP& other) = delete;
+		};
 
-		testVector.erase(1, 2);
+		class Custom
+		{
+		public:
+			static size_t CustomCTORCount;
+			static size_t CustomCCTORCount;
+			static size_t CustomAssignmentCount;
+			static size_t CustomDTORCount;
 
-		assert(testVector[0] == 123u);
-		assert(testVector[1] == 123456789u);
-		assert(testVector.size() == 2u);
+			Custom() 
+				: data(0)
+			{
+				++CustomCTORCount;
+			}
 
-		printf("Erase By Range Test done!\n");
+			Custom(int d)
+				: data(d)
+			{}
+
+			Custom(const Custom& other)
+			{
+				++CustomCCTORCount; 
+				data = other.data;
+			}
+
+			Custom& operator=(const Custom& other) 
+			{ 
+				++CustomAssignmentCount;
+				if (&other != this)
+				{
+					data = other.data;
+				} 
+				return *this; 
+			}
+
+			~Custom()
+			{
+				++CustomDTORCount;
+			}
+
+			size_t data;
+		};
+
+		void ResetStaticCounters()
+		{
+			Custom::CustomCTORCount = 0;
+			Custom::CustomDTORCount = 0;
+			Custom::CustomCCTORCount = 0;
+			Custom::CustomAssignmentCount = 0;
+		}
+
+		size_t Custom::CustomCTORCount = 0;
+		size_t Custom::CustomDTORCount = 0;
+		size_t Custom::CustomCCTORCount = 0;
+		size_t Custom::CustomAssignmentCount = 0;
+
+		void TestPushBack()
+		{
+			Vector<Custom> firstVec;
+
+			for (int i = 0; i < 5; ++i)
+			{
+				Custom temp(i);
+				firstVec.push_back(temp);
+			}
+
+			assert("Size should equal 5" && firstVec.size() == 5);
+
+			for (size_t i = 0; i < 5; ++i)
+			{
+				assert("Vector value mismatch" && firstVec[i].data == i);
+			}
+		}
+
+		void TestResizeDefaultCTOR(size_t initialSize, size_t resizeSize)
+		{
+			ResetStaticCounters();
+
+			Vector<Custom> vec;
+			vec.resize(initialSize);
+
+			ResetStaticCounters();
+
+			vec.resize(resizeSize);
+			assert("Vector size did not changed as requested" && vec.size() == resizeSize);
+			if (initialSize > resizeSize)
+			{
+				assert("Default DTOR was not called sufficient times" && Custom::CustomDTORCount == (initialSize - resizeSize));
+			}
+			else
+			{
+				assert("Default CTOR was not called sufficient times" && Custom::CustomCTORCount == (resizeSize - initialSize));
+			}
+		}
+
+		void TestResizeWithCCTOR(size_t initialSize, size_t resizeSize)
+		{
+			ResetStaticCounters();
+
+			Vector<Custom> vec;
+			vec.resize(initialSize);
+
+			ResetStaticCounters();
+
+			Custom initializer; 
+			initializer.data = 0xA;
+
+			vec.resize(resizeSize, initializer);
+			assert("Vector size did not changed as requested" && vec.size() == resizeSize);
+			if (initialSize > resizeSize)
+			{
+				assert("Default DTOR was not called sufficient times" && Custom::CustomDTORCount == (initialSize - resizeSize));
+			}
+			else
+			{
+				assert("CCTOR was not called sufficient times" && Custom::CustomCCTORCount == (resizeSize - initialSize));
+				for (size_t i = initialSize; i < resizeSize; ++i)
+				{
+					assert("Resize did not fill elements with requested default value" && vec[i].data == 0xA);
+				}
+			}
+		}
+
+		void TestErase()
+		{
+			ResetStaticCounters();
+
+			Vector<Custom> customVec;
+			customVec.resize(6);
+			customVec[0].data = 12u;
+			customVec[1].data = 34u;
+			customVec[2].data = 56u;
+			customVec[3].data = 78u;
+			customVec[4].data = 90u;
+			customVec[5].data = 1122u;
+
+			customVec.erase(1);
+
+			assert("No DTOR was called for erased object" && Custom::CustomDTORCount == 1);
+			assert("Assignment operators were not called sufficient times" && Custom::CustomAssignmentCount == 4);
+			assert(customVec[0].data == 12u);
+			assert(customVec[1].data == 56u);
+			assert(customVec[2].data == 78u);
+			assert(customVec[3].data == 90u);
+			assert(customVec[4].data == 1122u);
+		}
+
+		void TestEraseBySwap()
+		{
+			ResetStaticCounters();
+
+			Vector<Custom> customVec;
+			customVec.resize(6);
+			customVec[0].data = 12u;
+			customVec[1].data = 34u;
+			customVec[2].data = 56u;
+			customVec[3].data = 78u;
+			customVec[4].data = 90u;
+			customVec[5].data = 1122u;
+
+			customVec.erase_by_swap(1);
+
+			assert("No DTOR was called for erased object" && Custom::CustomDTORCount == 1);
+			assert("Assignment operators was called more than once" && Custom::CustomAssignmentCount == 1);
+			assert(customVec[0].data == 12u);
+			assert(customVec[1].data == 1122u);
+			assert(customVec[2].data == 56u);
+			assert(customVec[3].data == 78u);
+			assert(customVec[4].data == 90u);
+		}
+
+		void TestEraseRange()
+		{
+			ResetStaticCounters();
+
+			Vector<Custom> customVec;
+			customVec.resize(4);
+			customVec[0].data = 123u;
+			customVec[1].data = 456u;
+			customVec[2].data = 789u;
+			customVec[3].data = 123456789u;
+
+			customVec.erase(1, 2);
+
+			assert("No DTOR was called for erased object" && Custom::CustomDTORCount == 2);
+			assert("Assignment operators were not called sufficient times" && Custom::CustomAssignmentCount == 1);
+			assert(customVec[0].data == 123u);
+			assert(customVec[1].data == 123456789u);
+		}
+
+		void TestDTORCalls()
+		{
+			ResetStaticCounters();
+
+			{
+				Vector<Custom> customVec;
+				customVec.resize(100);
+			}
+
+			assert("DTOR was not called for all elements" && Custom::CustomDTORCount == 100);
+		}
+
+		// Uncomment to see compile error on using a vec resize without a default ctor
+		//void NonDefaultCTOR()
+		//{
+		//	Vector<ClassWithoutDefaultCTOR> nonDefaultCtorVec;
+		//	nonDefaultCtorVec.push_back(ClassWithoutDefaultCTOR(1));
+		//	nonDefaultCtorVec.push_back(ClassWithoutDefaultCTOR(2));
+		//	nonDefaultCtorVec.push_back(ClassWithoutDefaultCTOR(3));
+		//	assert("Size does not match" && nonDefaultCtorVec.size() == 3);
+
+		//	nonDefaultCtorVec.resize(10, ClassWithoutDefaultCTOR(12));
+		//	assert("Resize size does not match" && nonDefaultCtorVec.size() == 10);
+		//	// This shall not compile (and it will not)
+		//	nonDefaultCtorVec.resize(10);
+		//}
+
+		// Uncomment to see compile error on push_back with deleted cctor
+		//void NoCCTOR()
+		//{
+		//	// No copy-ctor, no push_back
+		//	Vector<ClassWithoutCCTOR> nonDefaultCtorVec;
+		//	nonDefaultCtorVec.push_back(ClassWithoutCCTOR());
+		//	nonDefaultCtorVec.push_back(ClassWithoutCCTOR());
+		//	nonDefaultCtorVec.push_back(ClassWithoutCCTOR());
+		//	assert("Size does not match" && nonDefaultCtorVec.size() == 3);
+		//}
+
+		//void NoAssignmentOP()
+		//{
+		//	Vector<ClassWithoutAssignmentOP> nonAssignmetnVec;
+		//	nonAssignmetnVec.push_back(ClassWithoutAssignmentOP());
+		//	nonAssignmetnVec.push_back(ClassWithoutAssignmentOP());
+		//	nonAssignmetnVec.push_back(ClassWithoutAssignmentOP());
+		//	assert("Size does not match" && nonAssignmetnVec.size() == 3);
+
+		//	nonAssignmetnVec.erase(1);
+		//}
 	}
 
-	void TestCopyConstructor()
+	template<class T>
+	void DefaultInit()
 	{
-		Vector<size_t> firstVector;
-
-		firstVector.push_back(123u);
-		firstVector.push_back(456u);
-		firstVector.push_back(789u);
-		firstVector.push_back(123456789u);
-
-		Vector<size_t> testVector(firstVector);
-
-		assert(testVector[0] == 123u);
-		assert(testVector[1] == 456u);
-		assert(testVector[2] == 789u);
-		assert(testVector[3] == 123456789u);
-
-		printf("Copy Constructor Test done!\n");
+		// default initialization
+		T* a = new T;
+		printf("Default initialized T at: %p\n", a);
+		assert("Int variable was default initialized" && *a != 0);
 	}
 
-	void TestResizing()
+	template<class T>
+	void ZeroInit()
 	{
-		Vector<size_t> testVector;
-		testVector.resize(2500, 0xDEADBEEF);
-
-		assert(testVector.size() == 2500);
-		const size_t capacity = testVector.capacity();
-
-		testVector.resize(500);
-
-		assert(testVector.size() == 500);
-		assert(testVector.capacity() == capacity);
-
-		printf("Resizing Test done!\n");
-	}
-
-	void TestReserving()
-	{
-		Vector<size_t> testVector;
-		testVector.reserve(2500);
-
-		SYSTEM_INFO sys_inf;
-		GetSystemInfo(&sys_inf);
-
-		const size_t pageSize = sys_inf.dwPageSize;
-
-		assert(testVector.empty());
-		const size_t expectedSize = (MathUtil::roundUpToMultiple(2500 * sizeof(size_t), pageSize)) / sizeof(size_t);
-		assert(testVector.capacity() == expectedSize);
-
-		printf("Reserving Test done!\n");
+		// zero initialization
+		T* b = new T();
+		printf("Zero initialized T at: %p\n", b);
+		assert("Int variable was zero initialized" && *b == 0);
 	}
 }
 
-template<class T>
-void A()
-{
-	// default initialization
-	T* a = new T;
-	printf("Default initialized T at: %p\n", a);
-	assert("Int variable was default initialized" && *a != 0);
-}
 
-template<class T>
-void B()
-{
-	// zero initialization
-	T* b = new T();
-	printf("Zero initialized T at: %p\n", b);
-	assert("Int variable was zero initialized" && *b == 0);
-}
-
-class ClassWithoutDefaultCTOR
-{
-public:
-	ClassWithoutDefaultCTOR(int bar) : foo(bar) {} 
-	int foo;
-};
-
-//TODO Make better Tests
-//TODO Test with non-default constructors
 int main()
 {
-	Testing::TestBasicTypePushBack(100000);
-	Testing::TestBasicClassPushBack(100);
-	Testing::TestHugeTypePushBack(500);
+	// Standard tets using vectors of int / size_t
+	UnitTests::Construction();
+	UnitTests::CopyConstruction();
+	UnitTests::Assignment();
 
-	Testing::TestErase();
-	Testing::TestEraseBySwap();
-	Testing::TestEraseByRange();
+	UnitTests::PushBack();
+	UnitTests::Reserve();
 
-	Testing::TestResizing();
-	Testing::TestReserving();
+	UnitTests::ResizeDefaultCtor(0, 10);
+	UnitTests::ResizeDefaultCtor(10, 10);
+	UnitTests::ResizeDefaultCtor(10, 5);
+	UnitTests::ResizeDefaultCtor(10, 20);
+	UnitTests::ResizeBigDefaultCtor();
 
-	Testing::TestCopyConstructor();
+	UnitTests::ResizeWithValue(0, 10);
+	UnitTests::ResizeWithValue(10, 10);
+	UnitTests::ResizeWithValue(10, 5);
+	UnitTests::ResizeWithValue(10, 20);
 
+	UnitTests::EraseSingle();
+	UnitTests::EraseBySwap();
+	UnitTests::EraseRange();
+	UnitTests::EraseEmptyRange();
+
+	// Tests with a CustomType start here
+	UnitTests::CustomTypes::TestPushBack();
+
+	UnitTests::CustomTypes::TestResizeDefaultCTOR(0, 10);
+	UnitTests::CustomTypes::TestResizeDefaultCTOR(10, 5);
+	UnitTests::CustomTypes::TestResizeDefaultCTOR(10, 10);
+	UnitTests::CustomTypes::TestResizeDefaultCTOR(10, 20);
+
+	UnitTests::CustomTypes::TestResizeWithCCTOR(0, 10);
+	UnitTests::CustomTypes::TestResizeWithCCTOR(10, 5);
+	UnitTests::CustomTypes::TestResizeWithCCTOR(10, 10);
+	UnitTests::CustomTypes::TestResizeWithCCTOR(10, 20);
+
+	UnitTests::CustomTypes::TestDTORCalls();
+	UnitTests::CustomTypes::TestErase();
+	UnitTests::CustomTypes::TestEraseBySwap();
+	UnitTests::CustomTypes::TestEraseRange();
+
+	// Uncomment these functions in the UnitTest suite to see the compile errors they are generating
+	// The are only referenced here to show that they exist
+	// UnitTests::CustomTypes::NonDefaultCTOR();
+	// UnitTests::CustomTypes::NoCCTOR();
+	// UnitTests::CustomTupes::NoAssignmentOP();
+
+	// Only a small test to see the difference between T() and T calls
+	// they print addresses that can be inspected in the memory window to show what happens after each call
+	// One is cleared to 0's the other is not
 	// T() vs T ctor call tests (zero initialization vs. default initialization)
-	A<int>();
-	B<int>();
-
-	Vector<ClassWithoutDefaultCTOR> vec;
-	vec.push_back(ClassWithoutDefaultCTOR(10));
-	vec.push_back(ClassWithoutDefaultCTOR(10));
-	vec.erase(0, 1);
+	UnitTests::DefaultInit<int>();
+	UnitTests::ZeroInit<int>();
 
 	printf("All Tests done!\n");
-
-	std::vector<int> a;
-	a.resize(10, 10);
-	a.erase(a.begin() + 5, a.begin() + 5);
 }
 
