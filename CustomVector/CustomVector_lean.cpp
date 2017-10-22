@@ -72,6 +72,7 @@ class Vector
 public:
 	Vector(void);
 	Vector(const Vector<T>& other);
+	Vector<T>& operator=(const Vector<T>& other);
 
 	size_t size(void) const;
 	size_t capacity(void) const;
@@ -127,7 +128,7 @@ Vector<T>::Vector()
 {}
 
 template <typename T>
-Vector<T>::Vector(const Vector& other)
+Vector<T>::Vector(const Vector<T>& other)
 	: m_size(0u)
 	, m_capacity(0u)
 	, m_pageSize(VirtualMemory::GetPageSize())
@@ -142,6 +143,46 @@ Vector<T>::Vector(const Vector& other)
 	{
 		push_back((other[i]));
 	}
+}
+
+template <typename T>
+Vector<T>& Vector<T>::operator=(const Vector<T>& other)
+{
+	if (this != &other)
+	{
+		// destruct elements of this vector
+		for (size_t i = 0u; i < m_size; ++i)
+		{
+			m_internal_array.as_element[i].~T();
+		}
+
+		// adjust capacity to match other vector
+		if (m_capacity > other.m_capacity)
+		{
+			size_t sizeToFree = (m_capacity - other.m_capacity) * sizeof(T);
+			
+			PointerType pointerToFreeFrom;
+			pointerToFreeFrom.as_ptr = m_physical_mem_end.as_ptr - sizeToFree;
+			
+			VirtualMemory::FreePhysicalMemory(pointerToFreeFrom.as_void, sizeToFree);
+			m_capacity = other.m_capacity;
+		}
+		else
+		{
+			reserve(other.m_capacity);
+		}
+		
+		// need to set size to 0, so push_back will work correctly
+		m_size = 0u;
+
+		// copy everything from the other vector
+		for (size_t i = 0; i < other.m_size; ++i)
+		{
+			push_back((other[i]));
+		}
+	}
+
+	return *this;
 }
 
 template <typename T>
@@ -279,7 +320,7 @@ template <typename T>
 void Vector<T>::reserve(size_t newCapacity)
 {
 	//If already big enough, do nothing
-	if (newCapacity < m_capacity)
+	if (newCapacity <= m_capacity)
 	{
 		return;
 	}
@@ -483,7 +524,56 @@ namespace UnitTests
 		assert(testVector[3] == 123456789u);
 	}
 
-	void Assignment() {}
+	void Assignment()
+	{
+		Vector<size_t> smallVector;
+		smallVector.push_back(123u);
+		smallVector.push_back(456u);
+		smallVector.push_back(789u);
+
+		Vector<size_t> mediumVector;
+		mediumVector.push_back(13u);
+		mediumVector.push_back(57u);
+		mediumVector.push_back(911u);
+		mediumVector.push_back(24u);
+		mediumVector.push_back(68u);
+		mediumVector.push_back(1012u);
+
+		Vector<size_t> largeVector;
+		largeVector.push_back(312u);
+		largeVector.push_back(654u);
+		largeVector.push_back(987u);
+		largeVector.push_back(121110u);
+		largeVector.push_back(151413u);
+		largeVector.push_back(181716u);
+		largeVector.push_back(212019u);
+		largeVector.push_back(242322u);
+		largeVector.push_back(272625u);
+
+		// test assignment of larger vector
+		mediumVector = largeVector;
+		assert("Vector size mismatch" && mediumVector.size() == largeVector.size());
+		assert("Vector capacity mismatch" && mediumVector.capacity() == largeVector.capacity());
+
+		assert(mediumVector[0] == 312u);
+		assert(mediumVector[1] == 654u);
+		assert(mediumVector[2] == 987u);
+		assert(mediumVector[3] == 121110u);
+		assert(mediumVector[4] == 151413u);
+		assert(mediumVector[5] == 181716u);
+		assert(mediumVector[6] == 212019u);
+		assert(mediumVector[7] == 242322u);
+		assert(mediumVector[8] == 272625u);
+
+		// test assignment of smaller vector
+		largeVector = smallVector;
+		assert("Vector size mismatch" && largeVector.size() == smallVector.size());
+		assert("Vector capacity mismatch" && largeVector.capacity() == smallVector.capacity());
+
+		assert(smallVector[0] == 123u);
+		assert(smallVector[1] == 456u);
+		assert(smallVector[2] == 789u);
+	}
 
 	void PushBack()
 	{
@@ -866,6 +956,35 @@ namespace UnitTests
 			assert("DTOR was not called for all elements" && Custom::CustomDTORCount == 100);
 		}
 
+		void TestAssignment()
+		{
+			ResetStaticCounters();
+
+			Vector<Custom> customVecLarge;
+			customVecLarge.resize(6);
+			customVecLarge[0].data = 12u;
+			customVecLarge[1].data = 34u;
+			customVecLarge[2].data = 56u;
+			customVecLarge[3].data = 78u;
+			customVecLarge[4].data = 90u;
+			customVecLarge[5].data = 1122u;
+
+			Vector<Custom> customVecSmall;
+			customVecSmall.resize(2);
+			customVecSmall[0].data = 987u;
+			customVecSmall[1].data = 654u;
+
+			customVecLarge = customVecSmall;
+
+			assert("DTOR was not called for all elements" && Custom::CustomDTORCount == 6);
+
+			assert("Vector size mismatch" && customVecLarge.size() == customVecSmall.size());
+			assert("Vector capacity mismatch" && customVecLarge.capacity() == customVecSmall.capacity());
+
+			assert(customVecLarge[0].data == 987u);
+			assert(customVecLarge[1].data == 654u);
+		}
+
 		// Uncomment to see compile error on using a vec resize without a default ctor
 		//void NonDefaultCTOR()
 		//{
@@ -964,6 +1083,7 @@ int main()
 	UnitTests::CustomTypes::TestResizeWithCCTOR(10, 20);
 
 	UnitTests::CustomTypes::TestDTORCalls();
+	UnitTests::CustomTypes::TestAssignment();
 	UnitTests::CustomTypes::TestErase();
 	UnitTests::CustomTypes::TestEraseBySwap();
 	UnitTests::CustomTypes::TestEraseRange();
