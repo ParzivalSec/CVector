@@ -161,10 +161,9 @@ Vector<T>& Vector<T>::operator=(const Vector<T>& other)
 		{
 			size_t sizeToFree = (m_capacity - other.m_capacity) * sizeof(T);
 			
-			PointerType pointerToFreeFrom;
-			pointerToFreeFrom.as_ptr = m_physical_mem_end.as_ptr - sizeToFree;
+			m_physical_mem_end.as_ptr -= sizeToFree;
 			
-			VirtualMemory::FreePhysicalMemory(pointerToFreeFrom.as_void, sizeToFree);
+			VirtualMemory::FreePhysicalMemory(m_physical_mem_end.as_void, sizeToFree);
 			m_capacity = other.m_capacity;
 		}
 		else
