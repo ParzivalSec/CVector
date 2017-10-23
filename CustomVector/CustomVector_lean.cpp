@@ -3,6 +3,8 @@
 #include <iostream>
 #include <cassert>
 
+#include <vector>
+
 /**
 * Custom vector implementation using virtual memory
 * Team: Alexander Mueller, Stefan Reinhold, Lukas Vogl
@@ -115,6 +117,7 @@ private:
 
 	void GrowByBytes(size_t growSizeInBytes);
 	size_t GetGrowSizeInElements(void) const;
+	size_t GetMaxElements(void) const;
 
 	size_t m_size;
 	size_t m_capacity;
@@ -161,6 +164,16 @@ Vector<T>::Vector(const Vector<T>& other)
 	}
 }
 
+/**
+* The Vector<T> assignment operator - the ust discussed piece of code in this exercise :)
+* We had three implementations we though about:
+* - On assignment, decommitt all pages and reserve the capacity of the other vector, push_back elements
+* - On assignment, just decommitt unsused pages (one need to be careful to not accidentially delete more pages by calculating a range that straddles two pages, to work we had this impleneation round down to the next smaller pageSize 4098 bytes would have been 4096 to just free the one redundant page)
+* - Be std::vector conform and don't shrink to the others vector capacity on assignment (that's what we chose after a long discussion)
+* We decided upon the third solution to let the user control when the vector shall release capacity / shrink - we did not
+* implement a shrink_to_fit function but we would let the user call it whenever a shrink is requested instead of
+* implicitely shrink on assignment
+**/
 template <typename T>
 Vector<T>& Vector<T>::operator=(const Vector<T>& other)
 {
@@ -172,21 +185,9 @@ Vector<T>& Vector<T>::operator=(const Vector<T>& other)
 			m_internal_array.as_element[i].~T();
 		}
 
-		// adjust capacity to match other vector
-		if (m_capacity > other.m_capacity)
-		{
-			size_t sizeToFree = (m_capacity - other.m_capacity) * sizeof(T);
-			// Here we round down to don't free more pages than neccessary to fit the capacitu
-			// VirtualFree frees all pages that are touched by any byte in the range beginPtr + size
-			// so if some bytes straddle a page boundary both pages would be decommitted. To prevent 
-			// this we check which pages needs to be decommitted and just decommitt them
-			sizeToFree = MathUtil::roundDownToMultiple(sizeToFree, m_pageSize);
-			
-			m_physical_mem_end.as_ptr -= sizeToFree;
-			VirtualMemory::FreePhysicalMemory(m_physical_mem_end.as_void, sizeToFree);
-			m_capacity = other.m_capacity;
-		}
-		else
+		// adjust capacity to match other vector only if the others capacity is larger than ours
+		// if it is lesser or equal we go with the current capacity and just copy in the others content
+		if (other.m_capacity > m_capacity)
 		{
 			reserve(other.m_capacity);
 		}
@@ -338,6 +339,11 @@ void Vector<T>::resize(size_t newSize, const T& object)
 template <typename T>
 void Vector<T>::reserve(size_t newCapacity)
 {
+	{
+		bool capacityRequestExceedsAvailableRange = newCapacity > GetMaxElements();
+		assert("Reserve requested more capacity then the max capacity possible" && !capacityRequestExceedsAvailableRange);
+	}
+
 	//If already big enough, do nothing
 	if (newCapacity <= m_capacity)
 	{
@@ -482,16 +488,20 @@ void Vector<T>::GrowByBytes(size_t growSizeInBytes)
 	size_t roundedGrowSize = MathUtil::roundUpToMultiple(growSizeInBytes, m_pageSize);
 
 	{
-		const bool isEndOfVirtualMemoryReached = m_physical_mem_end.as_ptr == m_virtual_mem_end.as_ptr;
-		assert("Maximum Capacity reached! Vector can not grow further." && !isEndOfVirtualMemoryReached);
+		// If the grow would exceed the available address space we cannot grow anymore
+		// this happends if the m_physical_mem pointer is already at the m_virtual_end
+		const bool addressSpaceEndReached = m_physical_mem_end.as_ptr == m_virtual_mem_end.as_ptr;
+		assert("Grow would exceed maximum available address space - cannot grow further!" && !addressSpaceEndReached);
 	}
 
-	// If the requested growSizeInBytes would exceed the maximum capacity, grow only to the maximum capacity
-	if (m_physical_mem_begin.as_ptr + roundedGrowSize > m_virtual_mem_end.as_ptr)
+	// We though about this and decided it makes sense that if a user
+	// push_backs into the vector and the grow behaviour would exceed the range
+	// then we allow growing to the maximum available address space and just fail to
+	// grow if we really are out of memory
+	if (m_physical_mem_end.as_ptr + roundedGrowSize > m_virtual_mem_end.as_ptr)
 	{
-		size_t maxAvailableGrowSize = m_virtual_mem_end.as_ptr - m_physical_mem_end.as_ptr;
-		// We allow the vector to 'overshoot' its max size by a maximum of one page
-		roundedGrowSize = MathUtil::roundUpToMultiple(maxAvailableGrowSize, m_pageSize);
+		size_t remainingGrowSpace = m_virtual_mem_end.as_ptr - m_physical_mem_end.as_ptr;
+		roundedGrowSize = MathUtil::roundDownToMultiple(remainingGrowSpace, m_pageSize);
 	}
 
 	PointerType allocation;
@@ -511,6 +521,12 @@ size_t Vector<T>::GetGrowSizeInElements() const
 	// INFO: This is a better optimization for a non virtual mem based vector implementation but we leave it here as a reference to think
 	// about this kind of micro-opts when virtual mem would not be a thing (thank `eternal thing` it is)
 	return m_capacity ? m_capacity * 2 : 8;
+}
+
+template<typename T>
+size_t Vector<T>::GetMaxElements(void) const
+{
+	return MAX_VECTOR_CAPACITY / sizeof(T);
 }
 
 /// ++++++++++++++++++++++++++++++++++++++++++
@@ -613,6 +629,20 @@ namespace UnitTests
 		}
 	}
 
+	void PushBackDepleteResources()
+	{
+		Vector<size_t> v;
+
+		// Vector can hold 134217727 size_ts on 64 bit in 1GB mem
+		for (size_t i = 0; i < 134217728; ++i)
+		{
+			v.push_back(0u);
+		}
+
+		// Pushing another element would exceed the available address space and asserts
+		v.push_back(666u);
+	}
+
 	void Reserve()
 	{
 		Vector<int> vec;
@@ -621,6 +651,13 @@ namespace UnitTests
 		// capacity shall be 1024 after the reserve call
 		vec.reserve(100);
 		assert("Capacity did not match the expected grow behaviour" && vec.capacity() == 1024);
+	}
+
+	void TooBigReserve()
+	{
+		Vector<size_t> v;
+		// 1GB on 64bit could hold 134217728 size_ts
+		v.reserve(134217729); // A reserve request that would exceed the max_capacity asserts
 	}
 
 	void ResizeDefaultCtor(size_t initialSize, size_t resizeSize)
@@ -996,20 +1033,23 @@ namespace UnitTests
 			customVecSmall[0].data = 987u;
 			customVecSmall[1].data = 654u;
 
+			size_t oldCapacity = customVecLarge.capacity();
 			customVecLarge = customVecSmall;
 
 			assert("DTOR was not called for all elements" && Custom::CustomDTORCount == 1000);
 
 			assert("Vector size mismatch" && customVecLarge.size() == customVecSmall.size());
-			assert("Vector capacity mismatch" && customVecLarge.capacity() == customVecSmall.capacity());
+			assert("Vector capacity mismatch" && customVecLarge.capacity() == oldCapacity);
 
 			assert(customVecLarge[0].data == 987u);
 			assert(customVecLarge[1].data == 654u);
 		}
 
-		// This test is used to test odd sized types because we had a gut feeling
+		// This test was used to test odd sized types because we had a gut feeling
 		// that this could cause some edge cases on assignment when some data stradles a 
-		// page boundary. It turned out it does so this test will stay here.
+		// page boundary. It turned out it did when we had the assignment operator implementation
+		// that kicked out unsued memory pages. Now stays here as a relict of some cool but non
+		// std::vector conform implementation (someone has lost the discussion)
 		void TestAssignmentOdd()
 		{
 			struct SixByte
@@ -1032,10 +1072,11 @@ namespace UnitTests
 			Vector<SixByte> customVecSmall;
 			customVecSmall.resize(2);
 
+			size_t oldCapacity = customVecLarge.capacity();
 			customVecLarge = customVecSmall;
 
 			assert("Vector size mismatch" && customVecLarge.size() == customVecSmall.size());
-			assert("Vector capacity mismatch" && customVecLarge.capacity() == customVecSmall.capacity());
+			assert("Vector capacity mismatch" && customVecLarge.capacity() == oldCapacity);
 		}
 
 		// Uncomment to see compile error on using a vec resize without a default ctor
@@ -1104,7 +1145,11 @@ int main()
 	UnitTests::Assignment();
 
 	UnitTests::PushBack();
+	// Uncomment this test to see how the vetor reacts upon push_backs that deplete the resources - takes some time in debug
+	// UnitTests::PushBackDepleteResources();
 	UnitTests::Reserve();
+	// Uncomment this test to see how the vector reacts upon a reserve that would exceed the max capacity - takes some time in debug
+	// UnitTests::TooBigReserve();
 
 	UnitTests::ResizeDefaultCtor(0, 10);
 	UnitTests::ResizeDefaultCtor(10, 10);
@@ -1154,6 +1199,10 @@ int main()
 	// T() vs T ctor call tests (zero initialization vs. default initialization)
 	UnitTests::DefaultInit<int>();
 	UnitTests::ZeroInit<int>();
+
+	std::vector<int> a;
+	a.reserve(100);
+	a.reserve(10);
 
 	printf("All Tests done!\n");
 }
