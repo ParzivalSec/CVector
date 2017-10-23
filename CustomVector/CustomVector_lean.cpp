@@ -1,8 +1,14 @@
 #include <cstdint>
 #include <Windows.h>
-#include <vector>
 #include <iostream>
 #include <cassert>
+
+/**
+* Custom vector implementation using virtual memory
+* Team: Alexander Müller, Stefan Rein
+*
+**/
+
 
 /**
  * VirtualMemory namespace is responsible for abstracting platform specific implemenations of virtual memory
@@ -21,7 +27,6 @@ namespace VirtualMemory
 	{
 		VirtualFree(from, 0u, MEM_RELEASE);
 	}
-
 
 	void* GetPhysicalMemory(void* from, size_t size)
 	{
@@ -56,6 +61,18 @@ namespace MathUtil
 			return numToRound;
 
 		return numToRound + multiple - remainder;
+	}
+
+	size_t roundDownToMultiple(size_t numToRound, size_t multiple)
+	{
+		if (multiple == 0)
+			return numToRound;
+
+		const size_t remainder = numToRound % multiple;
+		if (remainder == 0)
+			return numToRound;
+
+		return numToRound - remainder;
 	}
 }
 
@@ -160,9 +177,13 @@ Vector<T>& Vector<T>::operator=(const Vector<T>& other)
 		if (m_capacity > other.m_capacity)
 		{
 			size_t sizeToFree = (m_capacity - other.m_capacity) * sizeof(T);
+			// Here we round down to don't free more pages than neccessary to fit the capacitu
+			// VirtualFree frees all pages that are touched by any byte in the range beginPtr + size
+			// so if some bytes straddle a page boundary both pages would be decommitted. To prevent 
+			// this we check which pages needs to be decommitted and just decommitt them
+			sizeToFree = MathUtil::roundDownToMultiple(sizeToFree, m_pageSize);
 			
 			m_physical_mem_end.as_ptr -= sizeToFree;
-			
 			VirtualMemory::FreePhysicalMemory(m_physical_mem_end.as_void, sizeToFree);
 			m_capacity = other.m_capacity;
 		}
@@ -170,7 +191,7 @@ Vector<T>& Vector<T>::operator=(const Vector<T>& other)
 		{
 			reserve(other.m_capacity);
 		}
-		
+
 		// need to set size to 0, so push_back will work correctly
 		m_size = 0u;
 
@@ -477,6 +498,8 @@ void Vector<T>::GrowByBytes(size_t growSizeInBytes)
 	PointerType allocation;
 	allocation.as_void = VirtualMemory::GetPhysicalMemory(m_physical_mem_end.as_void, roundedGrowSize);
 	m_physical_mem_end.as_ptr = allocation.as_ptr + roundedGrowSize;
+	// If the range is not equally divisable by the sizeof(T) this implicitely does a floor(...)
+	// and we are good because we don't say that we have more capacity than we really have
 	m_capacity = (m_physical_mem_end.as_ptr - m_physical_mem_begin.as_ptr) / sizeof(T);
 }
 
@@ -959,14 +982,15 @@ namespace UnitTests
 		{
 			ResetStaticCounters();
 
+			// We need a slightly bigger vector than the one to copy 
+			// to really have different capacities
 			Vector<Custom> customVecLarge;
-			customVecLarge.resize(6);
-			customVecLarge[0].data = 12u;
-			customVecLarge[1].data = 34u;
-			customVecLarge[2].data = 56u;
-			customVecLarge[3].data = 78u;
-			customVecLarge[4].data = 90u;
-			customVecLarge[5].data = 1122u;
+			customVecLarge.resize(1000);
+
+			for (size_t i = 0; i < 1000; ++i)
+			{
+				customVecLarge[i].data = 1122u;
+			}
 
 			Vector<Custom> customVecSmall;
 			customVecSmall.resize(2);
@@ -975,13 +999,44 @@ namespace UnitTests
 
 			customVecLarge = customVecSmall;
 
-			assert("DTOR was not called for all elements" && Custom::CustomDTORCount == 6);
+			assert("DTOR was not called for all elements" && Custom::CustomDTORCount == 1000);
 
 			assert("Vector size mismatch" && customVecLarge.size() == customVecSmall.size());
 			assert("Vector capacity mismatch" && customVecLarge.capacity() == customVecSmall.capacity());
 
 			assert(customVecLarge[0].data == 987u);
 			assert(customVecLarge[1].data == 654u);
+		}
+
+		// This test is used to test odd sized types because we had a gut feeling
+		// that this could cause some edge cases on assignment when some data stradles a 
+		// page boundary. It turned out it does so this test will stay here.
+		void TestAssignmentOdd()
+		{
+			struct SixByte
+			{
+				bool one;
+				bool two;
+				bool three;
+				bool four;
+				bool five;
+				bool six;
+			};
+
+			ResetStaticCounters();
+
+			// We need a slightly bigger vector than the one to copy 
+			// to really have different capacities
+			Vector<SixByte> customVecLarge;
+			customVecLarge.resize(1000);
+
+			Vector<SixByte> customVecSmall;
+			customVecSmall.resize(2);
+
+			customVecLarge = customVecSmall;
+
+			assert("Vector size mismatch" && customVecLarge.size() == customVecSmall.size());
+			assert("Vector capacity mismatch" && customVecLarge.capacity() == customVecSmall.capacity());
 		}
 
 		// Uncomment to see compile error on using a vec resize without a default ctor
@@ -1083,6 +1138,7 @@ int main()
 
 	UnitTests::CustomTypes::TestDTORCalls();
 	UnitTests::CustomTypes::TestAssignment();
+	UnitTests::CustomTypes::TestAssignmentOdd();
 	UnitTests::CustomTypes::TestErase();
 	UnitTests::CustomTypes::TestEraseBySwap();
 	UnitTests::CustomTypes::TestEraseRange();
