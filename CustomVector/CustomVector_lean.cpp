@@ -5,10 +5,9 @@
 
 /**
 * Custom vector implementation using virtual memory
-* Team: Alexander Müller, Stefan Rein
+* Team: Alexander Mueller, Stefan Reinhold, Lukas Vogl
 *
 **/
-
 
 /**
  * VirtualMemory namespace is responsible for abstracting platform specific implemenations of virtual memory
