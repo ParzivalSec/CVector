@@ -3,12 +3,12 @@
 #include <iostream>
 #include <cassert>
 
-#include <vector>
-
 /**
 * Custom vector implementation using virtual memory
 * Team: Alexander Mueller, Stefan Reinhold, Lukas Vogl
-*
+* Environment: Windows 64bit, Debug / Release
+* Remark: This vector implementation uses virtual memory and supports a upper bound of 1GB of memoery per vector
+* If you need more you have to adjust the MAX_VECTOR_CAPACITY to fit your needs
 **/
 
 /**
@@ -134,6 +134,9 @@ private:
 	static const size_t MAX_VECTOR_CAPACITY = 1024 * 1024 * 1024;
 };
 
+/**
+* Constructor without parameters just sets up the internal resources needed in its initializer list
+**/
 template <typename T>
 Vector<T>::Vector()
 	: m_size(0u)
@@ -146,6 +149,9 @@ Vector<T>::Vector()
 	, m_internal_array { m_physical_mem_begin }
 {}
 
+/**
+* Copy Ctor just reserves enough space to hold the content of the other vector and then push_backs them
+**/
 template <typename T>
 Vector<T>::Vector(const Vector<T>& other)
 	: m_size(0u)
@@ -205,6 +211,10 @@ Vector<T>& Vector<T>::operator=(const Vector<T>& other)
 	return *this;
 }
 
+/**
+* On destruction we call the dtors of all our elements and then release all pages and the
+* virtual address space
+**/
 template <typename T>
 Vector<T>::~Vector()
 {
@@ -233,6 +243,12 @@ bool Vector<T>::empty() const
 	return m_size == 0u;
 }
 
+/**
+* Push_back is responsible for adding a new element to the internal array using placement new
+* If the capacity is not big enough to hold the new element the vector grows by allocating new
+* memory pages if there is enough address space left to do so. The grow policy is capacity times two 
+* at the moment
+**/
 template <typename T>
 void Vector<T>::push_back(const T& object)
 {
@@ -258,6 +274,11 @@ void Vector<T>::push_back(const T& object)
 template <typename T>
 void Vector<T>::resize(size_t newSize)
 {
+	{
+		bool resizeRequestExceedsAvailableRange = newSize > GetMaxElements();
+		assert("Resize requested more elements then the max capacity possible" && !resizeRequestExceedsAvailableRange);
+	}
+
 	if (newSize == m_size)
 	{
 		return;
@@ -299,6 +320,11 @@ void Vector<T>::resize(size_t newSize)
 template <typename T>
 void Vector<T>::resize(size_t newSize, const T& object)
 {
+	{
+		bool resizeRequestExceedsAvailableRange = newSize > GetMaxElements();
+		assert("Resize requested more elements then the max capacity possible" && !resizeRequestExceedsAvailableRange);
+	}
+
 	if (newSize == m_size)
 	{
 		return;
@@ -388,7 +414,6 @@ void Vector<T>::erase(size_t index)
 
 	// At the end call the dtor for the last element to free its resources too
 	m_internal_array.as_element[m_size - 1].~T();
-
 	--m_size;
 }
 
@@ -523,6 +548,9 @@ size_t Vector<T>::GetGrowSizeInElements() const
 	return m_capacity ? m_capacity * 2 : 8;
 }
 
+/**
+* Convenient function to retrieve the maximum amount of elements this vector can ever hold
+**/
 template<typename T>
 size_t Vector<T>::GetMaxElements(void) const
 {
@@ -1199,10 +1227,6 @@ int main()
 	// T() vs T ctor call tests (zero initialization vs. default initialization)
 	UnitTests::DefaultInit<int>();
 	UnitTests::ZeroInit<int>();
-
-	std::vector<int> a;
-	a.reserve(100);
-	a.reserve(10);
 
 	printf("All Tests done!\n");
 }
