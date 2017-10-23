@@ -80,6 +80,7 @@ namespace MathUtil
 template <typename T>
 class Vector
 {
+	// Again the neat PointerType union to prevent many casts
 	union PointerType
 	{
 		void* as_void;
@@ -130,7 +131,6 @@ private:
 	PointerType m_internal_array;
 
 	//Maximum vector capacity as mentioned in lecture - 1GB
-	//TODO Find out if we want to grow adress space too
 	static const size_t MAX_VECTOR_CAPACITY = 1024 * 1024 * 1024;
 };
 
@@ -268,6 +268,15 @@ void Vector<T>::push_back(const T& object)
 
 	++m_size;
 }
+
+/**
+* We also discussed a lot about the duplicated code here in the resize functions but came to the conclusion
+* that for us this is the only valid approach we came upon. If we would use an internal_resize(size_t, T*)
+* to use the same code and differentiate the construction code via a valid pointer / nullptr then it would also
+* not compile because the compiler would already see the copy-constructor in the branch using copy-construction.
+* This would force the user to implement a copy-constructor although resize(size_t) was called. We decided it
+* is better (but not nice at all) to go with duplicated code instead
+**/
 
 /*
  * On a resize request we have 3 possible actions to do:
@@ -1172,6 +1181,19 @@ namespace UnitTests
 	}
 }
 
+template <class A>
+void someF(A* some)
+{
+	A* temp = new A();
+	if (some == nullptr)
+	{
+		temp = new (temp)A;
+	}
+	else
+	{
+		temp = new(temp)A(*some);
+	}
+}
 
 int main()
 {
