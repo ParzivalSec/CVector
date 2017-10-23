@@ -7,12 +7,12 @@
 * Custom vector implementation using virtual memory
 * Team: Alexander Mueller, Stefan Reinhold, Lukas Vogl
 * Environment: Windows 64bit, Debug / Release
-* Remark: This vector implementation uses virtual memory and supports a upper bound of 1GB of memoery per vector
+* Remark: This vector implementation uses virtual memory and supports a upper bound of 1GB of memory per vector
 * If you need more you have to adjust the MAX_VECTOR_CAPACITY to fit your needs
 **/
 
 /**
- * VirtualMemory namespace is responsible for abstracting platform specific implemenations of virtual memory
+ * VirtualMemory namespace is responsible for abstracting platform specific implementations of virtual memory
  * Currently we only support an implementation for Windows
  */
 namespace VirtualMemory
@@ -48,7 +48,7 @@ namespace VirtualMemory
 }
 
 /**
- * Math namespace is a collection of functions that help with math calculations / helpers
+ * Math namespace is a collection of functions that help with math calculations
  */
 namespace MathUtil
 {
@@ -150,7 +150,7 @@ Vector<T>::Vector()
 {}
 
 /**
-* Copy Ctor just reserves enough space to hold the content of the other vector and then push_backs them
+* Copy Constructor just reserves enough space to hold the content of the other vector and then push_backs the elements
 **/
 template <typename T>
 Vector<T>::Vector(const Vector<T>& other)
@@ -171,10 +171,10 @@ Vector<T>::Vector(const Vector<T>& other)
 }
 
 /**
-* The Vector<T> assignment operator - the ust discussed piece of code in this exercise :)
+* The Vector<T> assignment operator - the most discussed piece of code in this exercise :)
 * We had three implementations we though about:
 * - On assignment, decommitt all pages and reserve the capacity of the other vector, push_back elements
-* - On assignment, just decommitt unsused pages (one need to be careful to not accidentially delete more pages by calculating a range that straddles two pages, to work we had this impleneation round down to the next smaller pageSize 4098 bytes would have been 4096 to just free the one redundant page)
+* - On assignment, just decommitt unsused pages (one need to be careful to not accidentially delete more pages by calculating a range that straddles two pages, to make this work we had this impleneation round down to the next smaller pageSize 4098 bytes would have been 4096 to just free the one redundant page)
 * - Be std::vector conform and don't shrink to the others vector capacity on assignment (that's what we chose after a long discussion)
 * We decided upon the third solution to let the user control when the vector shall release capacity / shrink - we did not
 * implement a shrink_to_fit function but we would let the user call it whenever a shrink is requested instead of
@@ -257,6 +257,11 @@ void Vector<T>::push_back(const T& object)
 		GrowByBytes(GetGrowSizeInElements() * sizeof(T));
 	}
 
+	// if we were not able to grow anymore, the placement new will try to write memory that we don't have
+	// and therefore propably crash. This only happens in release mode, because of the missing assert in GrowByBytes().
+	// we decided to do this anyways, because it is propably better to let the user crash, than to just do nothing and
+	// let the user think everything worked fine when it actually did not.
+
 	PointerType targetPtr;
 	targetPtr.as_ptr = m_internal_array.as_ptr + m_size * sizeof(T);
 	new (targetPtr.as_void) T(object);
@@ -297,7 +302,7 @@ void Vector<T>::resize(size_t newSize)
 		{
 			targetPtr.as_ptr = m_internal_array.as_ptr + i * sizeof(T);
 			// Small optimization here for built-in types. Before we called T() here what we discovered zero-initializes built-in types
-			// introducind a very small overhead to default-initialization but it can be measured and therefore gained us some performace
+			// introducing a very small overhead to default-initialization but it can be measured and therefore gained us some performace
 			new (targetPtr.as_void) T;
 		}
 	}
@@ -313,9 +318,8 @@ void Vector<T>::resize(size_t newSize)
 }
 
 /*
- * This resize overload works just like the resize(size_t) function but with the difference of
- * constructing the new elements using the cctor of the T type and call it with the provided template
- * object
+ * This resize overload works just like the resize(size_t) function but with the difference of constructing 
+ * the new elements using the copy ctor of the T type and call it with the provided template object
  */
 template <typename T>
 void Vector<T>::resize(size_t newSize, const T& object)
@@ -359,7 +363,7 @@ void Vector<T>::resize(size_t newSize, const T& object)
 
 /**
  * In reserve(size_t) we try to aquire new resources to fit the requested capacity. If we already have grown big enough
- * we have to do nothing. If we don't fit we grow the internal array by requesting more physical memory from our
+ * we have to do nothing. If we don't fit, we grow the internal array by requesting more physical memory from our
  * preallocated virtual address space.
  */
 template <typename T>
@@ -385,10 +389,10 @@ void Vector<T>::reserve(size_t newCapacity)
 /**
  * Erase with one parameter removes the element under this index from the vector. We first check if the index is out of range
  * where we can only do the check for the upper bound because we decided to take a size_t as parameter (no negativ index). We
- * then using the assignment operator of the stored type T to move every element on slot to the front and so we 'bubble up'
- * the element we have the dtor upon to the end. We then call the dtor to the last element and reuce the size
+ * then use the assignment operator of the stored type T to move every element one slot to the front and so we 'bubble up'
+ * the element we have the dtor upon to the end. We then call the dtor to the last element and reduce the size
  * 
- * We stick to the complexity behaviour if std::vector
+ * We stick to the complexity behaviour of std::vector
  * that says erase will call DTOR for N where N is the amount of elements to delete and will call Assignment OP M times
  * where M is the amount of elements after the deleted one.
  */
@@ -396,7 +400,7 @@ template <typename T>
 void Vector<T>::erase(size_t index)
 {
 	{
-		//Check if index is in Range, no negative check needed because unsigned
+		//Check if index is in Range, no negative check needed because size_t is unsigned
 		const bool isIndexInRange = index < m_size;
 		assert("Index out of Range!" && isIndexInRange);
 	}
@@ -407,12 +411,12 @@ void Vector<T>::erase(size_t index)
 		current.as_element = &(m_internal_array.as_element[i]);
 		next.as_element = &(m_internal_array.as_element[i + 1]);
 
-		// Assign the next to the current element (assuming the user implemented the asignment operator properly)
+		// Assign the next to the current element (assuming the user implemented the assignment operator properly)
 		// Also a requirement of std::vector (MoveAssignment) implemented
 		*current.as_element = *next.as_element;
 	}
 
-	// At the end call the dtor for the last element to free its resources too
+	// At the end call the dtor for the last element to free its resources
 	m_internal_array.as_element[m_size - 1].~T();
 	--m_size;
 }
@@ -436,7 +440,7 @@ void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 	// If begin == end means begin is not dereferencable and can not be deleted -> no-op
 	if (rangeBegin != rangeEnd)
 	{
-		// Erasing a range needs to bubbling up a group of holes
+		// Erasing a range needs to bubble up a group of holes
 		// To do so we check how many elements shall be deleted and offset the index of the loop by this
 		// to assign a still valid object to an invalid hole.
 		size_t elementsToDelete = rangeEnd - rangeBegin + 1;
@@ -468,7 +472,11 @@ void Vector<T>::erase(size_t rangeBegin, size_t rangeEnd)
 template <typename T>
 void Vector<T>::erase_by_swap(size_t index)
 {
-	assert("Index out of Range!" && index < m_size);
+	{
+		//Check if index is in Range, no negative check needed because size_t is unsigned
+		const bool isIndexInRange = index < m_size;
+		assert("Index out of Range!" && isIndexInRange);
+	}
 
 	PointerType lastElement;
 	lastElement.as_element = &(m_internal_array.as_element[m_size - 1]);
@@ -502,12 +510,12 @@ const T& Vector<T>::operator[](size_t index) const
 
 /**
  * GrowByBytes is an internal function used to get more physical memory for the
- * preallocated virtual address space. 
+ * prereserved virtual address space. 
  */
 template <typename T>
 void Vector<T>::GrowByBytes(size_t growSizeInBytes)
 {
-	if (growSizeInBytes == 0u) return; // Grow by 0 are just rejected
+	if (growSizeInBytes == 0u) return; // Grows by 0 are just rejected
 	
 	// Round up to the next highest multiple of the current OS page size
 	size_t roundedGrowSize = MathUtil::roundUpToMultiple(growSizeInBytes, m_pageSize);
@@ -730,7 +738,7 @@ namespace UnitTests
 			}
 		}
 
-		assert("Vector size did not changed as requested" && vec.size() == resizeSize);
+		assert("Vector size did not change as requested" && vec.size() == resizeSize);
 	}
 
 	void EraseSingle()
@@ -924,7 +932,7 @@ namespace UnitTests
 			ResetStaticCounters();
 
 			vec.resize(resizeSize);
-			assert("Vector size did not changed as requested" && vec.size() == resizeSize);
+			assert("Vector size did not change as requested" && vec.size() == resizeSize);
 			if (initialSize > resizeSize)
 			{
 				assert("Default DTOR was not called sufficient times" && Custom::CustomDTORCount == (initialSize - resizeSize));
@@ -948,7 +956,7 @@ namespace UnitTests
 			initializer.data = 0xA;
 
 			vec.resize(resizeSize, initializer);
-			assert("Vector size did not changed as requested" && vec.size() == resizeSize);
+			assert("Vector size did not change as requested" && vec.size() == resizeSize);
 			if (initialSize > resizeSize)
 			{
 				assert("Default DTOR was not called sufficient times" && Custom::CustomDTORCount == (initialSize - resizeSize));
